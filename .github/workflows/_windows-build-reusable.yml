@@ -62,10 +62,18 @@ jobs:
         if: steps.deps-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
+          $bonjourUrl = "${{ secrets.BONJOUR_SDK_BUNDLE_URL }}"
+          $ffmpegUrl = "${{ secrets.FFMPEG_BUNDLE_URL }}"
+          $opensslUrl = "${{ secrets.OPENSSL_BUNDLE_URL }}"
+
+          if ([string]::IsNullOrWhiteSpace($bonjourUrl) -or [string]::IsNullOrWhiteSpace($ffmpegUrl) -or [string]::IsNullOrWhiteSpace($opensslUrl)) {
+            throw "Dependency bundle URL secrets are not configured. Set BONJOUR_SDK_BUNDLE_URL, FFMPEG_BUNDLE_URL, and OPENSSL_BUNDLE_URL in the calling workflow/repository secrets."
+          }
+
           New-Item -ItemType Directory -Path "$env:DEPS_DIR" -Force | Out-Null
-          Invoke-WebRequest -Uri "${{ secrets.BONJOUR_SDK_BUNDLE_URL }}" -OutFile "$env:DEPS_DIR/bonjour-sdk.zip"
-          Invoke-WebRequest -Uri "${{ secrets.FFMPEG_BUNDLE_URL }}" -OutFile "$env:DEPS_DIR/ffmpeg.zip"
-          Invoke-WebRequest -Uri "${{ secrets.OPENSSL_BUNDLE_URL }}" -OutFile "$env:DEPS_DIR/openssl.zip"
+          Invoke-WebRequest -Uri $bonjourUrl -OutFile "$env:DEPS_DIR/bonjour-sdk.zip"
+          Invoke-WebRequest -Uri $ffmpegUrl -OutFile "$env:DEPS_DIR/ffmpeg.zip"
+          Invoke-WebRequest -Uri $opensslUrl -OutFile "$env:DEPS_DIR/openssl.zip"
 
       - name: Extract dependency bundles
         shell: pwsh
