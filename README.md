@@ -922,6 +922,9 @@ and can be used on networks that don't allow DNS_SD.  See [instructions below](#
 
 -   tested on Windows 10 and 11, 64-bit.
 
+For running prebuilt ZIP releases on clean Windows systems, see [Windows Portable Build Guide](docs/windows-portable.md).
+For QA validation on pristine Windows VMs, see [Windows Clean-VM Test Checklist](docs/windows-clean-test-checklist.md).
+
 1.  Download and install **Bonjour SDK for Windows v3.0**. You can
     download the SDK without any registration at
     [softpedia.com](https://www.softpedia.com/get/Programming/SDK-DDK/Bonjour-SDK.shtml),
