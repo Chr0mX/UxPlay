@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    uses: ./.github/workflows/_windows-build-reusable.yml
+    with:
+      build_type: Release
+      upload_name: uxplay-windows-release
+      package_zip: true
+    secrets:
+      BONJOUR_SDK_BUNDLE_URL: ${{ secrets.BONJOUR_SDK_BUNDLE_URL }}
+      FFMPEG_BUNDLE_URL: ${{ secrets.FFMPEG_BUNDLE_URL }}
+      OPENSSL_BUNDLE_URL: ${{ secrets.OPENSSL_BUNDLE_URL }}
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: build-release
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: uxplay-windows-release-Release
+          path: artifact
+
+      - name: Validate packaged ZIP exists
+        run: |
+          test -f artifact/uxplay-windows-${GITHUB_REF_NAME}.zip
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifact/uxplay-windows-${{ github.ref_name }}.zip
+          generate_release_notes: true
