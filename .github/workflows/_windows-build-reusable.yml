@@ -92,13 +92,6 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path artifact/logs -Force | Out-Null
-          New-Item -ItemType Directory -Path artifact/bin -Force | Out-Null
-          if (Test-Path "$env:BUILD_DIR/uxplay.exe") {
-            Copy-Item "$env:BUILD_DIR/uxplay.exe" artifact/bin/
-          }
-          if (Test-Path "$env:INSTALL_DIR") {
-            Copy-Item "$env:INSTALL_DIR/*" artifact/bin/ -Recurse -Force
-          }
           if (Test-Path "$env:BUILD_DIR/CMakeCache.txt") {
             Copy-Item "$env:BUILD_DIR/CMakeCache.txt" artifact/logs/
           }
@@ -109,18 +102,46 @@ jobs:
             Copy-Item "$env:BUILD_DIR/CMakeFiles/CMakeError.log" artifact/logs/
           }
 
+      - name: Build portable package layout
+        if: inputs.package_zip
+        shell: pwsh
+        run: |
+          ./tools/windows/New-PortablePackage.ps1 -RepoRoot . -OutDir artifact/windows-portable -ZipPath "artifact/uxplay-windows-${{ github.ref_name }}.zip"
+
+      - name: Validate Windows runtime dependencies
+        if: inputs.package_zip
+        shell: pwsh
+        run: |
+          $binDir = (Resolve-Path "artifact/windows-portable/bin").Path
+          $systemDirs = @(
+            "$env:WINDIR\System32",
+            "$env:WINDIR\SysWOW64"
+          )
+          $targets = Get-ChildItem $binDir -Filter *.exe
+          $targets += Get-ChildItem $binDir -Filter *.dll
+          foreach ($target in $targets) {
+            $output = & dumpbin /dependents $target.FullName 2>$null
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin failed for $($target.Name)" }
+            $deps = $output | Where-Object { $_ -match "\.dll" } | ForEach-Object { $_.Trim() } | Sort-Object -Unique
+            foreach ($dep in $deps) {
+              $exists = Test-Path (Join-Path $binDir $dep)
+              if (!$exists) {
+                foreach ($sd in $systemDirs) {
+                  if (Test-Path (Join-Path $sd $dep)) { $exists = $true; break }
+                }
+              }
+              if (!$exists) { throw "Unresolved import for $($target.Name): $dep" }
+            }
+          }
+
       - name: Validate release artifact directory shape
         if: inputs.package_zip
         shell: pwsh
         run: |
-          if (!(Test-Path artifact/bin/uxplay.exe)) { throw "artifact/bin/uxplay.exe missing" }
+          if (!(Test-Path artifact/windows-portable/bin/uxplay.exe)) { throw "artifact/windows-portable/bin/uxplay.exe missing" }
+          if (!(Test-Path artifact/windows-portable/lib)) { throw "artifact/windows-portable/lib missing" }
+          if (!(Test-Path artifact/windows-portable/README-Windows-Portable.md)) { throw "portable README missing" }
           if (!(Test-Path artifact/logs/CMakeCache.txt)) { throw "artifact/logs/CMakeCache.txt missing" }
-
-      - name: Create portable ZIP
-        if: inputs.package_zip
-        shell: pwsh
-        run: |
-          Compress-Archive -Path artifact/bin/* -DestinationPath "artifact/uxplay-windows-${{ github.ref_name }}.zip" -Force
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

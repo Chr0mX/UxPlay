@@ -1,0 +1,37 @@
+# UxPlay Windows portable runtime manifest
+# Format:
+#   <relative-destination>|<source-glob-or-path>
+# Destination paths are relative to the package root.
+# Source paths are resolved against repo root unless absolute.
+
+# Core executable
+bin/uxplay.exe|build/uxplay.exe
+
+# Bonjour / mDNS
+bin/dnssd.dll|deps/bonjour/**/dnssd.dll
+
+# OpenSSL runtime
+bin/libcrypto-*.dll|deps/openssl/**/*.dll
+bin/libssl-*.dll|deps/openssl/**/*.dll
+
+# FFmpeg runtime
+bin/avcodec-*.dll|deps/ffmpeg/**/*.dll
+bin/avformat-*.dll|deps/ffmpeg/**/*.dll
+bin/avutil-*.dll|deps/ffmpeg/**/*.dll
+bin/swresample-*.dll|deps/ffmpeg/**/*.dll
+bin/swscale-*.dll|deps/ffmpeg/**/*.dll
+
+# GStreamer runtime chain
+bin/libgstreamer-1.0-0.dll|install/bin/libgstreamer-1.0-0.dll
+bin/libgstbase-1.0-0.dll|install/bin/libgstbase-1.0-0.dll
+bin/libgstapp-1.0-0.dll|install/bin/libgstapp-1.0-0.dll
+bin/libgstvideo-1.0-0.dll|install/bin/libgstvideo-1.0-0.dll
+lib/gstreamer-1.0/*.dll|install/lib/gstreamer-1.0/*.dll
+lib/gio/modules/*.dll|install/lib/gio/modules/*.dll
+
+# Third-party license files included in distribution
+licenses/LICENSE-llhttp-MIT.txt|lib/llhttp/LICENSE-MIT
+licenses/LICENSE-OpenSSL.txt|deps/openssl/**/LICENSE*.txt
+licenses/LICENSE-FFmpeg.txt|deps/ffmpeg/**/LICENSE*.txt
+licenses/LICENSE-Bonjour.txt|deps/bonjour/**/License*.txt
+licenses/LICENSE-GStreamer.txt|install/share/licenses/gstreamer/LICENSE
