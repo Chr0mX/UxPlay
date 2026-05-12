@@ -64,8 +64,27 @@ target_link_libraries( uxplay renderers airplay )
 if (DBUS_FOUND)
       target_link_libraries( uxplay ${DBUS_LIBRARY})
 endif()
-
 install( TARGETS  uxplay RUNTIME DESTINATION bin )
+
+if (WIN32)
+  option(UXPLAY_ENABLE_PORTABLE_ZIP "Enable packaging helpers for a portable Windows ZIP release" ON)
+  if(UXPLAY_ENABLE_PORTABLE_ZIP)
+    set(CPACK_GENERATOR "ZIP")
+    set(CPACK_PACKAGE_NAME "uxplay")
+    set(CPACK_PACKAGE_VENDOR "UxPlay")
+    set(CPACK_PACKAGE_FILE_NAME "uxplay-${PROJECT_VERSION}-windows-portable")
+    include(CPack)
+
+    add_custom_target(portable_zip
+      COMMAND ${CMAKE_COMMAND} --install . --prefix "${CMAKE_INSTALL_PREFIX}"
+      COMMAND ${CMAKE_COMMAND}
+              -DPORTABLE_PREFIX=${CMAKE_INSTALL_PREFIX}
+              -DPORTABLE_OUT=${CMAKE_BINARY_DIR}/uxplay-portable.zip
+              -P ${CMAKE_SOURCE_DIR}/cmake/windows/PortableRelease.cmake
+      COMMENT "Install and bundle a portable Windows ZIP"
+    )
+  endif()
+endif()
 install( FILES uxplay.1 DESTINATION ${CMAKE_INSTALL_MANDIR}/man1 )
 install( FILES README.md README.txt README.html LICENSE DESTINATION ${CMAKE_INSTALL_DOCDIR} ) 
 install( FILES lib/llhttp/LICENSE-MIT DESTINATION ${CMAKE_INSTALL_DOCDIR}/llhttp )
