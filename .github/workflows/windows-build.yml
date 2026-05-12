@@ -1,0 +1,22 @@
+name: Windows CI Build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  windows-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Release]
+    uses: ./.github/workflows/_windows-build-reusable.yml
+    with:
+      build_type: ${{ matrix.build_type }}
+      upload_name: uxplay-windows-ci
+      package_zip: false
+    secrets:
+      BONJOUR_SDK_BUNDLE_URL: ${{ secrets.BONJOUR_SDK_BUNDLE_URL }}
+      FFMPEG_BUNDLE_URL: ${{ secrets.FFMPEG_BUNDLE_URL }}
+      OPENSSL_BUNDLE_URL: ${{ secrets.OPENSSL_BUNDLE_URL }}

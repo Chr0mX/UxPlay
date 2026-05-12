@@ -1,0 +1,130 @@
+name: Windows Build (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      build_type:
+        description: CMake build type
+        required: false
+        default: Release
+        type: string
+      upload_name:
+        description: Artifact name prefix
+        required: true
+        type: string
+      package_zip:
+        description: Produce portable zip package
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      BONJOUR_SDK_BUNDLE_URL:
+        required: true
+      FFMPEG_BUNDLE_URL:
+        required: true
+      OPENSSL_BUNDLE_URL:
+        required: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      BUILD_DIR: build
+      INSTALL_DIR: install
+      DEPS_DIR: deps
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2 (UCRT64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            base-devel
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-libplist
+            mingw-w64-ucrt-x86_64-gstreamer
+            mingw-w64-ucrt-x86_64-gst-plugins-base
+
+      - name: Cache dependency bundle downloads
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.DEPS_DIR }}
+          key: windows-deps-${{ runner.os }}-${{ hashFiles('.github/workflows/_windows-build-reusable.yml') }}-${{ secrets.BONJOUR_SDK_BUNDLE_URL }}-${{ secrets.FFMPEG_BUNDLE_URL }}-${{ secrets.OPENSSL_BUNDLE_URL }}
+
+      - name: Download dependency bundles
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "$env:DEPS_DIR" -Force | Out-Null
+          Invoke-WebRequest -Uri "${{ secrets.BONJOUR_SDK_BUNDLE_URL }}" -OutFile "$env:DEPS_DIR/bonjour-sdk.zip"
+          Invoke-WebRequest -Uri "${{ secrets.FFMPEG_BUNDLE_URL }}" -OutFile "$env:DEPS_DIR/ffmpeg.zip"
+          Invoke-WebRequest -Uri "${{ secrets.OPENSSL_BUNDLE_URL }}" -OutFile "$env:DEPS_DIR/openssl.zip"
+
+      - name: Extract dependency bundles
+        shell: pwsh
+        run: |
+          Expand-Archive -Path "$env:DEPS_DIR/bonjour-sdk.zip" -DestinationPath "$env:DEPS_DIR/bonjour" -Force
+          Expand-Archive -Path "$env:DEPS_DIR/ffmpeg.zip" -DestinationPath "$env:DEPS_DIR/ffmpeg" -Force
+          Expand-Archive -Path "$env:DEPS_DIR/openssl.zip" -DestinationPath "$env:DEPS_DIR/openssl" -Force
+
+      - name: Configure CMake
+        shell: msys2 {0}
+        run: |
+          export BONJOUR_SDK_HOME="${GITHUB_WORKSPACE//\\//}/deps/bonjour"
+          cmake -S . -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE="${{ inputs.build_type }}"
+
+      - name: Build
+        shell: msys2 {0}
+        run: cmake --build "$BUILD_DIR" --config "${{ inputs.build_type }}" --parallel
+
+      - name: Install portable tree
+        shell: msys2 {0}
+        run: cmake --install "$BUILD_DIR" --prefix "$INSTALL_DIR"
+
+      - name: Prepare artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifact/logs -Force | Out-Null
+          New-Item -ItemType Directory -Path artifact/bin -Force | Out-Null
+          if (Test-Path "$env:BUILD_DIR/uxplay.exe") {
+            Copy-Item "$env:BUILD_DIR/uxplay.exe" artifact/bin/
+          }
+          if (Test-Path "$env:INSTALL_DIR") {
+            Copy-Item "$env:INSTALL_DIR/*" artifact/bin/ -Recurse -Force
+          }
+          if (Test-Path "$env:BUILD_DIR/CMakeCache.txt") {
+            Copy-Item "$env:BUILD_DIR/CMakeCache.txt" artifact/logs/
+          }
+          if (Test-Path "$env:BUILD_DIR/CMakeFiles/CMakeOutput.log") {
+            Copy-Item "$env:BUILD_DIR/CMakeFiles/CMakeOutput.log" artifact/logs/
+          }
+          if (Test-Path "$env:BUILD_DIR/CMakeFiles/CMakeError.log") {
+            Copy-Item "$env:BUILD_DIR/CMakeFiles/CMakeError.log" artifact/logs/
+          }
+
+      - name: Validate release artifact directory shape
+        if: inputs.package_zip
+        shell: pwsh
+        run: |
+          if (!(Test-Path artifact/bin/uxplay.exe)) { throw "artifact/bin/uxplay.exe missing" }
+          if (!(Test-Path artifact/logs/CMakeCache.txt)) { throw "artifact/logs/CMakeCache.txt missing" }
+
+      - name: Create portable ZIP
+        if: inputs.package_zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path artifact/bin/* -DestinationPath "artifact/uxplay-windows-${{ github.ref_name }}.zip" -Force
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.upload_name }}-${{ inputs.build_type }}
+          path: artifact
+          if-no-files-found: error
