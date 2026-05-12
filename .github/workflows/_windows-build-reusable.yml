@@ -102,6 +102,12 @@ jobs:
             Copy-Item "$env:BUILD_DIR/CMakeFiles/CMakeError.log" artifact/logs/
           }
 
+
+      - name: Validate runtime rendering paths
+        shell: pwsh
+        run: |
+          ./tools/windows/validate-rendering.ps1 -LogPath artifact/logs/rendering-validation.json
+
       - name: Build portable package layout
         if: inputs.package_zip
         shell: pwsh
