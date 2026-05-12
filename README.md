@@ -988,23 +988,40 @@ and can be used on networks that don't allow DNS_SD.  See [instructions below](#
     `ninja`
 
 6.  Assuming no error in either of these, you will have built the uxplay
-    executable **uxplay.exe** in the current ("build") directory. The
-    "sudo make install" and "sudo make uninstall" features offered in
-    the other builds are not available on Windows; instead, you can install the
-    uxplay.exe executable in `C:/msys64/ucrt64/bin` (plus manpage and
-    documentation in `C:/msys64/ucrt64/share/...`) with
+    executable **uxplay.exe** in the current ("build") directory.
+
+    **Source-build install flow (unchanged):** install to the MSYS2 UCRT prefix with
 
     `cmake --install . --prefix $HOME/../../ucrt64`
+
     You can later uninstall uxplay by returning to the build directory and running
 
     `ninja uninstall`
 
-    (This assumes that certain files in the build directory were not deleted since building UxPlay). 
+    (This assumes that certain files in the build directory were not deleted since building UxPlay).
 
     To be able to view the manpage, you need to install the manpage
     viewer with "`pacman -S man`".
 
-To run **uxplay.exe** you need to install some gstreamer plugin packages
+7.  **Portable binary release flow (new):** maintainers/build bots can still build inside
+    MSYS2, but a release ZIP should run on a clean Windows 10/11 install without requiring
+    the user to install MSYS2. Configure/build as above, then run:
+
+    `cmake --install . --prefix <portable-prefix>`
+
+    `cmake --build . --target portable_zip`
+
+    This uses scripts in `cmake/windows/` to copy the install tree and package runtime DLLs
+    into `build/uxplay-portable.zip`.
+
+### Windows packaging requirements
+
+-   **Build-time toolchain requirements (maintainer/build bot):** MSYS2 UCRT64, CMake, Ninja,
+    MinGW-w64 GCC, and development packages such as libplist + gstreamer headers/libraries.
+-   **Runtime requirements included in portable ZIP (end-user machine):** `uxplay.exe`, required
+    GStreamer runtime DLLs/plugins, and Bonjour runtime DLL if used for DNS-SD.
+
+To run **uxplay.exe** from a source-build install in MSYS2, you need to install some gstreamer plugin packages
 with `pacman -S mingw-w64-ucrt-x86_64-gst-<plugin>`, where the required ones
 have `<plugin>` given by
 
