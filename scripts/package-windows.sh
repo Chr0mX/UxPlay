@@ -147,6 +147,26 @@ rem Pass all arguments through to uxplay.exe
 "%UXPLAY_DIR%uxplay.exe" %*
 BATCHEOF
 
+# ── Copy GUI launcher ─────────────────────────────────────────────────────────
+if [ -f "${BUILD_DIR}/gui/uxplay-gui.exe" ]; then
+  cp "${BUILD_DIR}/gui/uxplay-gui.exe" "${DIST_DIR}/uxplay-gui.exe"
+  echo "==> Copied uxplay-gui.exe"
+  echo "==> Resolving uxplay-gui.exe DLL dependencies..."
+  ntldd -R "${DIST_DIR}/uxplay-gui.exe" 2>/dev/null \
+    | awk '{print $3}' \
+    | grep -i "ucrt64" \
+    | while read -r dep_path; do
+        dep_name=$(basename "${dep_path}")
+        if ! is_system_dll "${dep_name}" && [ ! -f "${DIST_DIR}/${dep_name}" ]; then
+          echo "    + ${dep_name} (gui dep)"
+          cp "${dep_path}" "${DIST_DIR}/${dep_name}"
+        fi
+      done
+else
+  echo "==> NOTE: uxplay-gui.exe not found in build/gui/ — skipping GUI launcher"
+fi
+cp "${REPO_ROOT}/gui/uxplay-gui.bat" "${DIST_DIR}/uxplay-gui.bat"
+
 # ── Copy Bluetooth beacon script (Windows module) ────────────────────────────
 BEACON_DIR="${REPO_ROOT}/Bluetooth_LE_beacon"
 if [ -d "${BEACON_DIR}" ]; then
