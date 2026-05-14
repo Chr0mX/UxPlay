@@ -13,6 +13,7 @@
 #include <d3d11.h>
 #include <dxgi.h>
 #include <tchar.h>
+#include <cstdio>
 #include <string>
 #include <vector>
 #include <fstream>
@@ -33,7 +34,7 @@ struct Settings {
     bool  pin             = false;
     char  password[128]   = "";
     int   videoSinkIdx    = 0;
-    int   videoDecoderIdx = 0;
+    int   videoDecoderIdx = 3;  // default: Auto (decodebin), graceful hardware fallback
     bool  h265            = false;
     int   audioSinkIdx    = 0;
     int   rotationIdx     = 0;
@@ -63,13 +64,17 @@ static const Option kAudioSinks[] = {
     { "Auto",              ""                     },
     { "Disabled",          "-a"                   },
 };
-static const Option kRotations[] = {
-    { "None",    ""     },
-    { "Flip H",  "-f H" },
-    { "Flip V",  "-f V" },
-    { "90\xc2\xb0 CW",  "-r R" },
-    { "90\xc2\xb0 CCW", "-r L" },
-    { "180\xc2\xb0",    "-f I" },
+// rotate-method values match GstVideoOrientationMethod enum
+// injected as a sink property: -vs "d3d11videosink rotate-method=N"
+// no stream reconnect needed with d3d11/d3d12 sinks
+struct RotOption { const char* label; int method; };
+static const RotOption kRotations[] = {
+    { "None",    0 },
+    { "90\xc2\xb0 CW",  1 },
+    { "180\xc2\xb0",    2 },
+    { "90\xc2\xb0 CCW", 3 },
+    { "Flip H",  4 },
+    { "Flip V",  5 },
 };
 
 static std::string BuildArgs(const Settings& s)
@@ -88,11 +93,21 @@ static std::string BuildArgs(const Settings& s)
     if (s.pin)           append("-pin");
     if (s.password[0])   { append("-pw"); append(std::string("\"") + s.password + "\""); }
 
-    append(kVideoSinks[s.videoSinkIdx].flag);
+    // Video sink — inject rotate-method into the sink property when rotation != None
+    {
+        const char* sf = kVideoSinks[s.videoSinkIdx].flag; // e.g. "-vs d3d11videosink"
+        if (sf[0] && s.rotationIdx != 0) {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "-vs \"%s rotate-method=%d\"",
+                     sf + 4, kRotations[s.rotationIdx].method); // sf+4 skips "-vs "
+            append(buf);
+        } else {
+            append(sf);
+        }
+    }
     append(kVideoDecoders[s.videoDecoderIdx].flag);
     if (s.h265) append("-h265");
     append(kAudioSinks[s.audioSinkIdx].flag);
-    append(kRotations[s.rotationIdx].flag);
     if (s.volume < 0.995f) {
         char vbuf[16]; snprintf(vbuf, sizeof(vbuf), "%.2f", s.volume);
         append("-vol"); append(vbuf);
