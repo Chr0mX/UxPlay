@@ -135,9 +135,22 @@ find "${DIST_DIR}/gst-plugins" -name "*.dll" | while read -r plugin_dll; do
       done
 done
 
-# ── Copy GStreamer plugin scanner (needed for plugin registry) ────────────────
+# ── Copy GStreamer plugin scanner + its own DLL deps ─────────────────────────
 GST_SCANNER="${UCRT64_BIN}/gst-plugin-scanner.exe"
-[ -f "${GST_SCANNER}" ] && cp "${GST_SCANNER}" "${DIST_DIR}/gst-plugin-scanner.exe"
+if [ -f "${GST_SCANNER}" ]; then
+  cp "${GST_SCANNER}" "${DIST_DIR}/gst-plugin-scanner.exe"
+  echo "==> Resolving gst-plugin-scanner.exe DLL dependencies..."
+  ntldd -R "${DIST_DIR}/gst-plugin-scanner.exe" 2>/dev/null \
+    | awk '{print $3}' \
+    | grep -i "ucrt64" \
+    | while read -r dep_path; do
+        dep_name=$(basename "${dep_path}")
+        if ! is_system_dll "${dep_name}" && [ ! -f "${DIST_DIR}/${dep_name}" ]; then
+          echo "    + ${dep_name} (scanner dep)"
+          cp "${dep_path}" "${DIST_DIR}/${dep_name}"
+        fi
+      done
+fi
 
 # ── Copy dnssd.dll (Bonjour) if available ─────────────────────────────────────
 DNSSD_SRC="${SCRIPT_DIR}/dnssd.dll"
@@ -158,9 +171,14 @@ setlocal
 
 rem UxPlay launcher — sets GStreamer environment then starts uxplay.exe
 set "UXPLAY_DIR=%~dp0"
+
+rem Point GStreamer at the bundled plugins; store registry next to the exe
+rem so it rebuilds automatically when the package is run for the first time.
 set "GST_PLUGIN_PATH=%UXPLAY_DIR%gst-plugins"
 set "GST_PLUGIN_SCANNER=%UXPLAY_DIR%gst-plugin-scanner.exe"
-set "GST_REGISTRY_UPDATE=no"
+set "GST_REGISTRY=%UXPLAY_DIR%gstreamer-registry.bin"
+rem Prevent GStreamer from searching a non-existent system installation
+set "GST_PLUGIN_SYSTEM_PATH="
 set "PATH=%UXPLAY_DIR%;%PATH%"
 
 rem Pass all arguments through to uxplay.exe
