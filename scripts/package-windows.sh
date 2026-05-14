@@ -236,5 +236,10 @@ READMEEOF
 # ── Create ZIP ────────────────────────────────────────────────────────────────
 echo "==> Creating ${ZIP_NAME}..."
 cd "${REPO_ROOT}"
-zip -r "${ZIP_NAME}" dist/ -x "*.missing"
+if command -v zip &>/dev/null; then
+  zip -r "${ZIP_NAME}" dist/ -x "*.missing"
+else
+  # Fallback: use 7-Zip (always available on Windows GitHub runners)
+  7z a -tzip "${ZIP_NAME}" ./dist/ -xr!"*.missing"
+fi
 echo "==> Done: ${ZIP_NAME} ($(du -sh "${ZIP_NAME}" | cut -f1))"
