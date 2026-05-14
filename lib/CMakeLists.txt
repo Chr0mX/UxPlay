@@ -150,16 +150,25 @@ if ( NOT APPLE )
     target_link_libraries(airplay PUBLIC ${DNSSD} )
   else()  # can also build if mDNSResponder or another implementation of dns_sd is present instead of Avahi
     if ( WIN32 )
-      if (DEFINED ENV{BONJOUR_SDK_HOME}) 
+      if (DEFINED ENV{BONJOUR_SDK_HOME})
         set(BONJOUR_SDK "$ENV{BONJOUR_SDK_HOME}" )
       else()
         set(BONJOUR_SDK "C:\\Program Files\\Bonjour SDK")
       endif()
       message( STATUS "BONJOUR_SDK_HOME " ${BONJOUR_SDK} )
-      set(DNSSD "${BONJOUR_SDK}/Lib/x64/dnssd.lib")
-      target_link_libraries(airplay ${DNSSD} )
-      message( STATUS "dns_sd: using " ${DNSSD} )
-      find_path(DNSSD_INCLUDE_DIR dns_sd.h HINTS ${BONJOUR_SDK}/Include )
+      # dnssd is loaded dynamically via LoadLibraryA/GetProcAddress; dnssd.lib is not
+      # needed when using dynamic loading, so linking it is optional.
+      set(DNSSD_LIBPATH "${BONJOUR_SDK}/Lib/x64/dnssd.lib")
+      if(EXISTS "${DNSSD_LIBPATH}")
+        target_link_libraries(airplay ${DNSSD_LIBPATH} )
+        message( STATUS "dns_sd: using import lib " ${DNSSD_LIBPATH} )
+      else()
+        message( STATUS "dns_sd: dnssd.lib not found - using dynamic loading (LoadLibraryA) only" )
+      endif()
+      # Search bundled header (deps/windows/dns_sd.h) as fallback for Bonjour SDK Include/
+      find_path(DNSSD_INCLUDE_DIR dns_sd.h
+                HINTS ${BONJOUR_SDK}/Include
+                      ${CMAKE_SOURCE_DIR}/deps/windows )
     else()
       find_library( DNSSD dns_sd )
       if( NOT DNSSD )
