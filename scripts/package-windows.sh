@@ -76,6 +76,7 @@ REQUIRED_PLUGINS=(
   libgstautodetect.dll         # autovideosink / autoaudiosink
   libgstplayback.dll           # playbin2 / playbin3
   libgsttypefindfunctions.dll  # format detection
+  libgstvolume.dll             # volume element — used in UxPlay audio pipeline
   libgstvideoconvertscale.dll  # colorspace conversion + scaling
   libgstaudioconvert.dll       # audio format conversion
   libgstaudioresample.dll      # audio sample-rate conversion
