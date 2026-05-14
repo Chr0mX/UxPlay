@@ -43,6 +43,7 @@ jobs:
             mingw-w64-ucrt-x86_64-gst-plugins-ugly
             mingw-w64-ucrt-x86_64-gst-libav
             mingw-w64-ucrt-x86_64-ntldd
+            zip
 
       - name: Acquire Bonjour dnssd.dll
         shell: pwsh
