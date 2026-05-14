@@ -110,6 +110,16 @@ for plugin in "${REQUIRED_PLUGINS[@]}"; do
     cp "${src}" "${DIST_DIR}/gst-plugins/${plugin}"
   else
     echo "    ! MISSING (required): ${plugin}"
+    # Try to locate the plugin that provides the element name via gst-inspect-1.0
+    element="${plugin#libgst}"       # strip libgst prefix
+    element="${element%.dll}"         # strip .dll suffix
+    found_dll=$(gst-inspect-1.0 "${element}" 2>/dev/null \
+      | grep -i "Filename:" | awk '{print $2}' | head -1)
+    if [ -n "${found_dll}" ] && [ -f "${found_dll}" ]; then
+      found_name=$(basename "${found_dll}")
+      echo "    ~ found via gst-inspect as ${found_name}"
+      cp "${found_dll}" "${DIST_DIR}/gst-plugins/${found_name}"
+    fi
   fi
 done
 
