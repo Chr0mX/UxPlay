@@ -1,0 +1,145 @@
+name: Windows Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - 'claude/**'
+      - claudecode
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build Windows Portable ZIP
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up MSYS2 UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-libplist
+            mingw-w64-ucrt-x86_64-gstreamer
+            mingw-w64-ucrt-x86_64-gst-plugins-base
+            mingw-w64-ucrt-x86_64-gst-plugins-good
+            mingw-w64-ucrt-x86_64-gst-plugins-bad
+            mingw-w64-ucrt-x86_64-gst-plugins-ugly
+            mingw-w64-ucrt-x86_64-gst-libav
+            mingw-w64-ucrt-x86_64-ntldd
+            zip
+
+      - name: Acquire Bonjour dnssd.dll
+        shell: pwsh
+        # dnssd.dll is the Bonjour mDNS client library; needed at runtime alongside
+        # the mDNSResponder service. We try several acquisition methods and always
+        # exit 0 so a missing DLL doesn't fail the build — users can install Bonjour
+        # separately.
+        run: |
+          $found = $false
+
+          # ── Method 1: Chocolatey (pre-installed on GitHub runners) ───────────
+          Write-Host "Trying: choco install bonjour..."
+          choco install bonjour -y --no-progress 2>&1 | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            $dll = Get-ChildItem -Path "C:\Program Files\Bonjour", "C:\Windows\System32" `
+              -Filter "dnssd.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($dll) {
+              Copy-Item $dll.FullName "scripts\dnssd.dll"
+              Write-Host "SUCCESS (choco): $($dll.FullName)"
+              $found = $true
+            }
+          }
+
+          # ── Method 2: Silent install of Apple Bonjour Print Services ─────────
+          # BonjourPSSetup.exe is an NSIS installer; /S runs it silently.
+          if (-not $found) {
+            Write-Host "Trying: Apple Bonjour Print Services silent install..."
+            try {
+              Invoke-WebRequest -Uri "https://support.apple.com/downloads/DL999/en_US/BonjourPSSetup.exe" `
+                -OutFile "BonjourSetup.exe" -UseBasicParsing -TimeoutSec 60
+              Start-Process "BonjourSetup.exe" -ArgumentList "/S" -Wait -NoNewWindow
+              Start-Sleep -Seconds 3
+              $dll = Get-ChildItem -Path "C:\Program Files\Bonjour", "C:\Windows\System32" `
+                -Filter "dnssd.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($dll) {
+                Copy-Item $dll.FullName "scripts\dnssd.dll"
+                Write-Host "SUCCESS (silent install): $($dll.FullName)"
+                $found = $true
+              }
+            } catch {
+              Write-Host "Silent install method failed: $_"
+            }
+          }
+
+          # ── Method 3: Check existing system locations ─────────────────────────
+          if (-not $found) {
+            $candidates = @(
+              "C:\Windows\System32\dnssd.dll",
+              "C:\Windows\SysWOW64\dnssd.dll",
+              "C:\Program Files\Bonjour\dnssd.dll"
+            )
+            $dll = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if ($dll) {
+              Copy-Item $dll "scripts\dnssd.dll"
+              Write-Host "SUCCESS (system): $dll"
+              $found = $true
+            }
+          }
+
+          if (-not $found) {
+            Write-Host "WARNING: dnssd.dll not acquired. Users must install Apple Bonjour for Windows."
+            Write-Host "Bonjour is bundled with iTunes, iCloud for Windows, or available standalone from Apple."
+            Set-Content "scripts\dnssd.dll.missing" `
+              "Install Apple Bonjour for Windows to enable AirPlay discovery."
+          }
+
+          # Always exit 0 — missing dnssd.dll is a runtime (not build) concern.
+          exit 0
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DNO_MARCH_NATIVE=ON
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Package portable ZIP
+        run: bash scripts/package-windows.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uxplay-windows-portable
+          path: uxplay-windows-*.zip
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: uxplay-windows-*.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
