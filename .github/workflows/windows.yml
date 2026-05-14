@@ -46,47 +46,71 @@ jobs:
 
       - name: Acquire Bonjour dnssd.dll
         shell: pwsh
+        # dnssd.dll is the Bonjour mDNS client library; needed at runtime alongside
+        # the mDNSResponder service. We try several acquisition methods and always
+        # exit 0 so a missing DLL doesn't fail the build — users can install Bonjour
+        # separately.
         run: |
-          # Try to download Apple's Bonjour Print Services for Windows
-          # which contains dnssd.dll (the mDNS client library)
-          $bonjourUrl = "https://support.apple.com/downloads/DL999/en_US/BonjourPSSetup.exe"
-          $fallbackUrl = "https://downloads.sourceforge.net/project/bonjour-for-windows/bonjour-for-windows/v1.0/Bonjour64.msi"
+          $found = $false
 
-          $success = $false
-          try {
-            Write-Host "Downloading Bonjour Print Services..."
-            Invoke-WebRequest -Uri $bonjourUrl -OutFile BonjourSetup.exe -UseBasicParsing -TimeoutSec 60
-            Write-Host "Extracting dnssd.dll..."
-            & "C:\Program Files\7-Zip\7z.exe" e BonjourSetup.exe "Bonjour64.msi" -o"." -y 2>$null
-            & "C:\Program Files\7-Zip\7z.exe" e Bonjour64.msi -o"bonjour_extracted" -y 2>$null
-            $dll = Get-ChildItem -Path "bonjour_extracted" -Recurse -Filter "dnssd.dll" | Select-Object -First 1
+          # ── Method 1: Chocolatey (pre-installed on GitHub runners) ───────────
+          Write-Host "Trying: choco install bonjour..."
+          choco install bonjour -y --no-progress 2>&1 | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            $dll = Get-ChildItem -Path "C:\Program Files\Bonjour", "C:\Windows\System32" `
+              -Filter "dnssd.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($dll) {
               Copy-Item $dll.FullName "scripts\dnssd.dll"
-              Write-Host "dnssd.dll extracted from Bonjour installer: $($dll.FullName)"
-              $success = $true
+              Write-Host "SUCCESS (choco): $($dll.FullName)"
+              $found = $true
             }
-          } catch {
-            Write-Host "Primary Bonjour download failed: $_"
           }
 
-          if (-not $success) {
-            Write-Host "Bonjour installer extraction failed. Checking system for existing dnssd.dll..."
-            $systemDll = @(
+          # ── Method 2: Silent install of Apple Bonjour Print Services ─────────
+          # BonjourPSSetup.exe is an NSIS installer; /S runs it silently.
+          if (-not $found) {
+            Write-Host "Trying: Apple Bonjour Print Services silent install..."
+            try {
+              Invoke-WebRequest -Uri "https://support.apple.com/downloads/DL999/en_US/BonjourPSSetup.exe" `
+                -OutFile "BonjourSetup.exe" -UseBasicParsing -TimeoutSec 60
+              Start-Process "BonjourSetup.exe" -ArgumentList "/S" -Wait -NoNewWindow
+              Start-Sleep -Seconds 3
+              $dll = Get-ChildItem -Path "C:\Program Files\Bonjour", "C:\Windows\System32" `
+                -Filter "dnssd.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($dll) {
+                Copy-Item $dll.FullName "scripts\dnssd.dll"
+                Write-Host "SUCCESS (silent install): $($dll.FullName)"
+                $found = $true
+              }
+            } catch {
+              Write-Host "Silent install method failed: $_"
+            }
+          }
+
+          # ── Method 3: Check existing system locations ─────────────────────────
+          if (-not $found) {
+            $candidates = @(
               "C:\Windows\System32\dnssd.dll",
+              "C:\Windows\SysWOW64\dnssd.dll",
               "C:\Program Files\Bonjour\dnssd.dll"
-            ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-            if ($systemDll) {
-              Copy-Item $systemDll "scripts\dnssd.dll"
-              Write-Host "Found system dnssd.dll: $systemDll"
-              $success = $true
+            )
+            $dll = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if ($dll) {
+              Copy-Item $dll "scripts\dnssd.dll"
+              Write-Host "SUCCESS (system): $dll"
+              $found = $true
             }
           }
 
-          if (-not $success) {
-            Write-Host "WARNING: dnssd.dll not found. Portable package will require Bonjour to be installed separately."
-            # Create a placeholder so the script doesn't fail; note in the README
-            Set-Content -Path "scripts\dnssd.dll.missing" -Value "Bonjour not found during build. Install Apple Bonjour for Windows."
+          if (-not $found) {
+            Write-Host "WARNING: dnssd.dll not acquired. Users must install Apple Bonjour for Windows."
+            Write-Host "Bonjour is bundled with iTunes, iCloud for Windows, or available standalone from Apple."
+            Set-Content "scripts\dnssd.dll.missing" `
+              "Install Apple Bonjour for Windows to enable AirPlay discovery."
           }
+
+          # Always exit 0 — missing dnssd.dll is a runtime (not build) concern.
+          exit 0
 
       - name: Configure CMake
         run: |
