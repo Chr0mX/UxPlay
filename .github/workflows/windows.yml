@@ -1,0 +1,119 @@
+name: Windows Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - 'claude/**'
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build Windows Portable ZIP
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up MSYS2 UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-libplist
+            mingw-w64-ucrt-x86_64-gstreamer
+            mingw-w64-ucrt-x86_64-gst-plugins-base
+            mingw-w64-ucrt-x86_64-gst-plugins-good
+            mingw-w64-ucrt-x86_64-gst-plugins-bad
+            mingw-w64-ucrt-x86_64-gst-plugins-ugly
+            mingw-w64-ucrt-x86_64-gst-libav
+            mingw-w64-ucrt-x86_64-ntldd
+
+      - name: Acquire Bonjour dnssd.dll
+        shell: pwsh
+        run: |
+          # Try to download Apple's Bonjour Print Services for Windows
+          # which contains dnssd.dll (the mDNS client library)
+          $bonjourUrl = "https://support.apple.com/downloads/DL999/en_US/BonjourPSSetup.exe"
+          $fallbackUrl = "https://downloads.sourceforge.net/project/bonjour-for-windows/bonjour-for-windows/v1.0/Bonjour64.msi"
+
+          $success = $false
+          try {
+            Write-Host "Downloading Bonjour Print Services..."
+            Invoke-WebRequest -Uri $bonjourUrl -OutFile BonjourSetup.exe -UseBasicParsing -TimeoutSec 60
+            Write-Host "Extracting dnssd.dll..."
+            & "C:\Program Files\7-Zip\7z.exe" e BonjourSetup.exe "Bonjour64.msi" -o"." -y 2>$null
+            & "C:\Program Files\7-Zip\7z.exe" e Bonjour64.msi -o"bonjour_extracted" -y 2>$null
+            $dll = Get-ChildItem -Path "bonjour_extracted" -Recurse -Filter "dnssd.dll" | Select-Object -First 1
+            if ($dll) {
+              Copy-Item $dll.FullName "scripts\dnssd.dll"
+              Write-Host "dnssd.dll extracted from Bonjour installer: $($dll.FullName)"
+              $success = $true
+            }
+          } catch {
+            Write-Host "Primary Bonjour download failed: $_"
+          }
+
+          if (-not $success) {
+            Write-Host "Bonjour installer extraction failed. Checking system for existing dnssd.dll..."
+            $systemDll = @(
+              "C:\Windows\System32\dnssd.dll",
+              "C:\Program Files\Bonjour\dnssd.dll"
+            ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if ($systemDll) {
+              Copy-Item $systemDll "scripts\dnssd.dll"
+              Write-Host "Found system dnssd.dll: $systemDll"
+              $success = $true
+            }
+          }
+
+          if (-not $success) {
+            Write-Host "WARNING: dnssd.dll not found. Portable package will require Bonjour to be installed separately."
+            # Create a placeholder so the script doesn't fail; note in the README
+            Set-Content -Path "scripts\dnssd.dll.missing" -Value "Bonjour not found during build. Install Apple Bonjour for Windows."
+          }
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DNO_MARCH_NATIVE=ON
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Package portable ZIP
+        run: bash scripts/package-windows.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uxplay-windows-portable
+          path: uxplay-windows-*.zip
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: uxplay-windows-*.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
