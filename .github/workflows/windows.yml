@@ -6,6 +6,7 @@ on:
       - 'v*'
     branches:
       - 'claude/**'
+      - claudecode
   pull_request:
     branches:
       - master
