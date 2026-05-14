@@ -97,6 +97,22 @@ find "${DIST_DIR}/gst-plugins" -name "*.dll" | while read -r plugin_dll; do
       done
 done
 
+# libgstcodec2json.dll may depend on DLLs outside the ucrt64 tree;
+# resolve without the path filter so its deps are always bundled.
+if [ -f "${DIST_DIR}/gst-plugins/libgstcodec2json.dll" ]; then
+  echo "==> Resolving libgstcodec2json.dll dependencies (no path filter)..."
+  ntldd -R "${DIST_DIR}/gst-plugins/libgstcodec2json.dll" 2>/dev/null \
+    | awk '$3 ~ /\// { print $3 }' \
+    | while read -r dep_path; do
+        [ -f "${dep_path}" ] || continue
+        dep_name=$(basename "${dep_path}")
+        if ! is_system_dll "${dep_name}" && [ ! -f "${DIST_DIR}/${dep_name}" ]; then
+          echo "    + ${dep_name} (codec2json dep)"
+          cp "${dep_path}" "${DIST_DIR}/${dep_name}"
+        fi
+      done || true
+fi
+
 # ── Copy GStreamer plugin scanner + its own DLL deps ─────────────────────────
 GST_SCANNER="${UCRT64_BIN}/gst-plugin-scanner.exe"
 if [ -f "${GST_SCANNER}" ]; then

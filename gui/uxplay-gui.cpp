@@ -26,20 +26,21 @@
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 struct Settings {
-    char serverName[128] = "";
-    int  port            = 7100;
-    bool fullscreen      = false;
-    char windowSize[32]  = "1920x1080";
-    bool pin             = false;
-    char password[128]   = "";
-    int  videoSinkIdx    = 0;
-    int  videoDecoderIdx = 0;
-    bool h265            = false;
-    int  audioSinkIdx    = 0;
-    int  rotationIdx     = 0;
-    bool noFreeze        = false;
-    bool debug           = false;
-    char extraArgs[256]  = "";
+    char  serverName[128] = "";
+    int   port            = 7100;
+    bool  fullscreen      = false;
+    char  windowSize[32]  = "1920x1080";
+    bool  pin             = false;
+    char  password[128]   = "";
+    int   videoSinkIdx    = 0;
+    int   videoDecoderIdx = 0;
+    bool  h265            = false;
+    int   audioSinkIdx    = 0;
+    int   rotationIdx     = 0;
+    float volume          = 1.0f;
+    bool  noFreeze        = false;
+    bool  debug           = false;
+    char  extraArgs[256]  = "";
 };
 
 struct Option { const char* label; const char* flag; };
@@ -92,8 +93,12 @@ static std::string BuildArgs(const Settings& s)
     if (s.h265) append("-h265");
     append(kAudioSinks[s.audioSinkIdx].flag);
     append(kRotations[s.rotationIdx].flag);
-    if (s.noFreeze) append("-nf");
-    if (s.debug)    append("-v");
+    if (s.volume < 0.995f) {
+        char vbuf[16]; snprintf(vbuf, sizeof(vbuf), "%.2f", s.volume);
+        append("-vol"); append(vbuf);
+    }
+    if (s.noFreeze) append("-nofreeze");
+    if (s.debug)    append("-d");
     if (s.extraArgs[0]) append(s.extraArgs);
 
     return args;
@@ -116,6 +121,7 @@ static void SaveSettings(const Settings& s, const std::string& path)
     f << "h265="            << (s.h265 ? 1 : 0) << "\n";
     f << "audioSinkIdx="    << s.audioSinkIdx  << "\n";
     f << "rotationIdx="     << s.rotationIdx   << "\n";
+    f << "volume="          << s.volume        << "\n";
     f << "noFreeze="        << (s.noFreeze ? 1 : 0) << "\n";
     f << "debug="           << (s.debug ? 1 : 0) << "\n";
     f << "extraArgs="       << s.extraArgs     << "\n";
@@ -141,7 +147,8 @@ static void LoadSettings(Settings& s, const std::string& path)
         else if (key == "videoDecoderIdx") s.videoDecoderIdx = std::stoi(val);
         else if (key == "h265")           s.h265 = (val == "1");
         else if (key == "audioSinkIdx")   s.audioSinkIdx    = std::stoi(val);
-        else if (key == "rotationIdx")    s.rotationIdx     = std::stoi(val);
+        else if (key == "rotationIdx")    s.rotationIdx = std::stoi(val);
+        else if (key == "volume")         s.volume = std::stof(val);
         else if (key == "noFreeze")       s.noFreeze = (val == "1");
         else if (key == "debug")          s.debug = (val == "1");
         else if (key == "extraArgs")      strncpy(s.extraArgs,  val.c_str(), sizeof(s.extraArgs) - 1);
@@ -151,6 +158,8 @@ static void LoadSettings(Settings& s, const std::string& path)
     clamp(s.videoDecoderIdx, 0, (int)(sizeof(kVideoDecoders) / sizeof(*kVideoDecoders)) - 1);
     clamp(s.audioSinkIdx,    0, (int)(sizeof(kAudioSinks)    / sizeof(*kAudioSinks))    - 1);
     clamp(s.rotationIdx,     0, (int)(sizeof(kRotations)     / sizeof(*kRotations))     - 1);
+    if (s.volume < 0.0f) s.volume = 0.0f;
+    if (s.volume > 1.0f) s.volume = 1.0f;
 }
 
 // ── Process management ────────────────────────────────────────────────────────
@@ -489,9 +498,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
 
         ImGui::Checkbox("H.265 / 4K support (-h265)", &settings.h265);
 
-        ImGui::SetNextItemWidth(220);
-        ComboOptions("Rotation / flip", &settings.rotationIdx,
-                     kRotations, (int)(sizeof(kRotations) / sizeof(*kRotations)));
+        {
+            int n = (int)(sizeof(kRotations) / sizeof(*kRotations));
+            if (ImGui::Button("Cycle rotation"))
+                settings.rotationIdx = (settings.rotationIdx + 1) % n;
+            ImGui::SameLine();
+            ImGui::Text("%s", kRotations[settings.rotationIdx].label);
+        }
 
         // ── Audio ──────────────────────────────────────────────────────────
         ImGui::SeparatorText("Audio");
@@ -500,11 +513,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         ComboOptions("Audio sink", &settings.audioSinkIdx,
                      kAudioSinks, (int)(sizeof(kAudioSinks) / sizeof(*kAudioSinks)));
 
+        ImGui::SetNextItemWidth(220);
+        ImGui::SliderFloat("Volume (-vol)", &settings.volume, 0.0f, 1.0f, "%.2f");
+
         // ── Advanced ────────────────────────────────────────────────────────
         ImGui::SeparatorText("Advanced");
 
-        ImGui::Checkbox("No freeze on disconnect (-nf)", &settings.noFreeze);
-        ImGui::Checkbox("Debug / verbose logging (-v)", &settings.debug);
+        ImGui::Checkbox("No freeze on disconnect (-nofreeze)", &settings.noFreeze);
+        ImGui::Checkbox("Debug logging (-d)", &settings.debug);
 
         ImGui::SetNextItemWidth(-1.0f);
         ImGui::InputText("Extra arguments", settings.extraArgs, sizeof(settings.extraArgs));
