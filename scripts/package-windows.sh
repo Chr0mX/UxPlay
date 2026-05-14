@@ -165,8 +165,6 @@ if [ -f "${BUILD_DIR}/gui/uxplay-gui.exe" ]; then
 else
   echo "==> NOTE: uxplay-gui.exe not found in build/gui/ — skipping GUI launcher"
 fi
-cp "${REPO_ROOT}/gui/uxplay-gui.bat" "${DIST_DIR}/uxplay-gui.bat"
-
 # ── Copy Bluetooth beacon script (Windows module) ────────────────────────────
 BEACON_DIR="${REPO_ROOT}/Bluetooth_LE_beacon"
 if [ -d "${BEACON_DIR}" ]; then

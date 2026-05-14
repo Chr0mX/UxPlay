@@ -9,6 +9,7 @@
 #endif
 
 #include <windows.h>
+#include <shellapi.h>
 #include <d3d11.h>
 #include <dxgi.h>
 #include <tchar.h>
@@ -104,20 +105,20 @@ static void SaveSettings(const Settings& s, const std::string& path)
 {
     std::ofstream f(path);
     if (!f) return;
-    f << "serverName="    << s.serverName    << "\n";
-    f << "port="          << s.port          << "\n";
-    f << "fullscreen="    << (s.fullscreen ? 1 : 0) << "\n";
-    f << "windowSize="    << s.windowSize    << "\n";
-    f << "pin="           << (s.pin ? 1 : 0) << "\n";
-    f << "password="      << s.password      << "\n";
-    f << "videoSinkIdx="  << s.videoSinkIdx  << "\n";
+    f << "serverName="      << s.serverName    << "\n";
+    f << "port="            << s.port          << "\n";
+    f << "fullscreen="      << (s.fullscreen ? 1 : 0) << "\n";
+    f << "windowSize="      << s.windowSize    << "\n";
+    f << "pin="             << (s.pin ? 1 : 0) << "\n";
+    f << "password="        << s.password      << "\n";
+    f << "videoSinkIdx="    << s.videoSinkIdx  << "\n";
     f << "videoDecoderIdx=" << s.videoDecoderIdx << "\n";
-    f << "h265="          << (s.h265 ? 1 : 0) << "\n";
-    f << "audioSinkIdx="  << s.audioSinkIdx  << "\n";
-    f << "rotationIdx="   << s.rotationIdx   << "\n";
-    f << "noFreeze="      << (s.noFreeze ? 1 : 0) << "\n";
-    f << "debug="         << (s.debug ? 1 : 0) << "\n";
-    f << "extraArgs="     << s.extraArgs     << "\n";
+    f << "h265="            << (s.h265 ? 1 : 0) << "\n";
+    f << "audioSinkIdx="    << s.audioSinkIdx  << "\n";
+    f << "rotationIdx="     << s.rotationIdx   << "\n";
+    f << "noFreeze="        << (s.noFreeze ? 1 : 0) << "\n";
+    f << "debug="           << (s.debug ? 1 : 0) << "\n";
+    f << "extraArgs="       << s.extraArgs     << "\n";
 }
 
 static void LoadSettings(Settings& s, const std::string& path)
@@ -130,22 +131,21 @@ static void LoadSettings(Settings& s, const std::string& path)
         if (eq == std::string::npos) continue;
         std::string key = line.substr(0, eq);
         std::string val = line.substr(eq + 1);
-        if (key == "serverName")     strncpy(s.serverName,  val.c_str(), sizeof(s.serverName) - 1);
-        else if (key == "port")      s.port = std::stoi(val);
-        else if (key == "fullscreen") s.fullscreen = (val == "1");
-        else if (key == "windowSize") strncpy(s.windowSize, val.c_str(), sizeof(s.windowSize) - 1);
-        else if (key == "pin")       s.pin = (val == "1");
-        else if (key == "password")  strncpy(s.password,   val.c_str(), sizeof(s.password) - 1);
-        else if (key == "videoSinkIdx")    s.videoSinkIdx    = std::stoi(val);
+        if      (key == "serverName")     strncpy(s.serverName,  val.c_str(), sizeof(s.serverName) - 1);
+        else if (key == "port")           s.port = std::stoi(val);
+        else if (key == "fullscreen")     s.fullscreen = (val == "1");
+        else if (key == "windowSize")     strncpy(s.windowSize, val.c_str(), sizeof(s.windowSize) - 1);
+        else if (key == "pin")            s.pin = (val == "1");
+        else if (key == "password")       strncpy(s.password,   val.c_str(), sizeof(s.password) - 1);
+        else if (key == "videoSinkIdx")   s.videoSinkIdx    = std::stoi(val);
         else if (key == "videoDecoderIdx") s.videoDecoderIdx = std::stoi(val);
-        else if (key == "h265")      s.h265 = (val == "1");
-        else if (key == "audioSinkIdx")    s.audioSinkIdx    = std::stoi(val);
-        else if (key == "rotationIdx")     s.rotationIdx     = std::stoi(val);
-        else if (key == "noFreeze")  s.noFreeze = (val == "1");
-        else if (key == "debug")     s.debug = (val == "1");
-        else if (key == "extraArgs") strncpy(s.extraArgs,  val.c_str(), sizeof(s.extraArgs) - 1);
+        else if (key == "h265")           s.h265 = (val == "1");
+        else if (key == "audioSinkIdx")   s.audioSinkIdx    = std::stoi(val);
+        else if (key == "rotationIdx")    s.rotationIdx     = std::stoi(val);
+        else if (key == "noFreeze")       s.noFreeze = (val == "1");
+        else if (key == "debug")          s.debug = (val == "1");
+        else if (key == "extraArgs")      strncpy(s.extraArgs,  val.c_str(), sizeof(s.extraArgs) - 1);
     }
-    // clamp indices
     auto clamp = [](int& v, int lo, int hi) { if (v < lo) v = lo; if (v > hi) v = hi; };
     clamp(s.videoSinkIdx,    0, (int)(sizeof(kVideoSinks)    / sizeof(*kVideoSinks))    - 1);
     clamp(s.videoDecoderIdx, 0, (int)(sizeof(kVideoDecoders) / sizeof(*kVideoDecoders)) - 1);
@@ -155,9 +155,9 @@ static void LoadSettings(Settings& s, const std::string& path)
 
 // ── Process management ────────────────────────────────────────────────────────
 
-static HANDLE   g_hProcess = NULL;
-static HANDLE   g_hThread  = NULL;
-static wchar_t  g_exeDir[MAX_PATH] = {};
+static HANDLE  g_hProcess = NULL;
+static HANDLE  g_hThread  = NULL;
+static wchar_t g_exeDir[MAX_PATH] = {};
 
 static bool IsUxPlayRunning()
 {
@@ -183,7 +183,6 @@ static void LaunchUxPlay(const Settings& s)
     wcscpy_s(exePath, g_exeDir);
     wcscat_s(exePath, L"uxplay.exe");
 
-    // Command line: "path\uxplay.exe" <args>
     std::wstring cmdLine = L"\"";
     cmdLine += exePath;
     cmdLine += L"\"";
@@ -212,24 +211,55 @@ static void StopUxPlay()
     CloseHandle(g_hThread);  g_hThread  = NULL;
 }
 
+// ── System tray ───────────────────────────────────────────────────────────────
+
+static NOTIFYICONDATA g_nid    = {};
+static bool           g_inTray = false;
+#define WM_TRAYICON (WM_APP + 1)
+
+static void MinimizeToTray(HWND hWnd)
+{
+    if (g_inTray) return;
+    ZeroMemory(&g_nid, sizeof(g_nid));
+    g_nid.cbSize           = sizeof(g_nid);
+    g_nid.hWnd             = hWnd;
+    g_nid.uID              = 1;
+    g_nid.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    g_nid.uCallbackMessage = WM_TRAYICON;
+    g_nid.hIcon            = (HICON)LoadImage(NULL, IDI_APPLICATION, IMAGE_ICON, 0, 0, LR_SHARED);
+    wcscpy_s(g_nid.szTip, L"UxPlay \x2014 running");
+    Shell_NotifyIconW(NIM_ADD, &g_nid);
+    ShowWindow(hWnd, SW_HIDE);
+    g_inTray = true;
+}
+
+static void RestoreFromTray(HWND hWnd)
+{
+    if (!g_inTray) return;
+    Shell_NotifyIconW(NIM_DELETE, &g_nid);
+    ShowWindow(hWnd, SW_SHOW);
+    ShowWindow(hWnd, SW_RESTORE);
+    SetForegroundWindow(hWnd);
+    g_inTray = false;
+}
+
 // ── D3D11 device / swap chain ─────────────────────────────────────────────────
 
-static ID3D11Device*            g_pd3dDevice           = NULL;
-static ID3D11DeviceContext*     g_pd3dDeviceContext     = NULL;
-static IDXGISwapChain*          g_pSwapChain            = NULL;
-static ID3D11RenderTargetView*  g_mainRenderTargetView  = NULL;
+static ID3D11Device*            g_pd3dDevice          = NULL;
+static ID3D11DeviceContext*     g_pd3dDeviceContext    = NULL;
+static IDXGISwapChain*          g_pSwapChain           = NULL;
+static ID3D11RenderTargetView*  g_mainRenderTargetView = NULL;
 
 static bool CreateDeviceD3D(HWND hWnd)
 {
     DXGI_SWAP_CHAIN_DESC sd = {};
     sd.BufferCount = 2;
-    sd.BufferDesc.Width = 0; sd.BufferDesc.Height = 0;
     sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     sd.BufferDesc.RefreshRate.Numerator = 60; sd.BufferDesc.RefreshRate.Denominator = 1;
     sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     sd.OutputWindow = hWnd;
-    sd.SampleDesc.Count = 1; sd.SampleDesc.Quality = 0;
+    sd.SampleDesc.Count = 1;
     sd.Windowed = TRUE;
     sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
 
@@ -288,10 +318,37 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         return 0;
     case WM_SYSCOMMAND:
-        if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
+        if ((wParam & 0xfff0) == SC_MINIMIZE) { MinimizeToTray(hWnd); return 0; }
+        if ((wParam & 0xfff0) == SC_KEYMENU)  return 0;
         break;
+    case WM_CLOSE:
+        if (IsUxPlayRunning()) { MinimizeToTray(hWnd); }
+        else                   { DestroyWindow(hWnd); }
+        return 0;
     case WM_DESTROY:
         PostQuitMessage(0);
+        return 0;
+    case WM_TRAYICON:
+        if (lParam == WM_LBUTTONDBLCLK) {
+            RestoreFromTray(hWnd);
+        } else if (lParam == WM_RBUTTONUP) {
+            POINT pt; GetCursorPos(&pt);
+            HMENU menu = CreatePopupMenu();
+            AppendMenuW(menu, MF_STRING, 1, L"Show");
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(menu, MF_STRING | (IsUxPlayRunning() ? 0 : MF_GRAYED), 2, L"Stop UxPlay");
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(menu, MF_STRING, 3, L"Exit");
+            SetForegroundWindow(hWnd);  // required so menu dismisses on click-away
+            int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                                     pt.x, pt.y, 0, hWnd, NULL);
+            DestroyMenu(menu);
+            switch (cmd) {
+            case 1: RestoreFromTray(hWnd); break;
+            case 2: StopUxPlay(); break;
+            case 3: StopUxPlay(); Shell_NotifyIconW(NIM_DELETE, &g_nid); DestroyWindow(hWnd); break;
+            }
+        }
         return 0;
     }
     return DefWindowProcW(hWnd, msg, wParam, lParam);
@@ -322,6 +379,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     GetModuleFileNameW(NULL, g_exeDir, MAX_PATH);
     wchar_t* lastSlash = wcsrchr(g_exeDir, L'\\');
     if (lastSlash) { lastSlash[1] = 0; } else { g_exeDir[0] = 0; }
+
+    // Set GStreamer environment so spawned uxplay.exe inherits it (replaces bat file)
+    std::wstring dir(g_exeDir);
+    SetEnvironmentVariableW(L"GST_PLUGIN_PATH",        (dir + L"gst-plugins").c_str());
+    SetEnvironmentVariableW(L"GST_PLUGIN_SCANNER",     (dir + L"gst-plugin-scanner.exe").c_str());
+    SetEnvironmentVariableW(L"GST_REGISTRY",           (dir + L"gstreamer-registry.bin").c_str());
+    SetEnvironmentVariableW(L"GST_PLUGIN_SYSTEM_PATH", L"");
+    wchar_t existingPath[32768] = {};
+    GetEnvironmentVariableW(L"PATH", existingPath, 32767);
+    SetEnvironmentVariableW(L"PATH", (dir + L";" + existingPath).c_str());
 
     std::string iniDir(g_exeDir, g_exeDir + wcslen(g_exeDir));
     std::string iniPath = iniDir + "uxplay-settings.ini";
@@ -355,7 +422,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = NULL; // we manage persistence ourselves
+    io.IniFilename = NULL;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     ImGui::StyleColorsDark();
@@ -385,8 +452,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoCollapse |
             ImGuiWindowFlags_NoBringToFrontOnFocus);
-
-        ImGui::SetNextItemWidth(-1.0f);
 
         // ── Basic ──────────────────────────────────────────────────────────
         ImGui::SeparatorText("Basic");
@@ -484,6 +549,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
 
     // Cleanup
     StopUxPlay();
+    Shell_NotifyIconW(NIM_DELETE, &g_nid);
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
