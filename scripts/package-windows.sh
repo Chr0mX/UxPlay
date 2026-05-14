@@ -161,7 +161,7 @@ if [ -f "${BUILD_DIR}/gui/uxplay-gui.exe" ]; then
           echo "    + ${dep_name} (gui dep)"
           cp "${dep_path}" "${DIST_DIR}/${dep_name}"
         fi
-      done
+      done || true
 else
   echo "==> NOTE: uxplay-gui.exe not found in build/gui/ — skipping GUI launcher"
 fi
