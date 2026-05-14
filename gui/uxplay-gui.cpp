@@ -13,6 +13,7 @@
 #include <dxgi.h>
 #include <tchar.h>
 #include <string>
+#include <vector>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
