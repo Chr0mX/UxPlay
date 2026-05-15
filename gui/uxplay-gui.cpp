@@ -37,7 +37,6 @@ struct Settings {
     int   videoDecoderIdx = 3;  // default: Auto (decodebin), graceful hardware fallback
     bool  h265            = false;
     int   audioSinkIdx    = 0;
-    int   rotationIdx     = 0;
     float volume          = 1.0f;
     bool  noFreeze        = false;
     bool  debug           = false;
@@ -64,18 +63,6 @@ static const Option kAudioSinks[] = {
     { "Auto",              ""                     },
     { "Disabled",          "-a"                   },
 };
-// rotate-method values match GstVideoOrientationMethod enum
-// injected as a sink property: -vs "d3d11videosink rotate-method=N"
-// no stream reconnect needed with d3d11/d3d12 sinks
-struct RotOption { const char* label; int method; };
-static const RotOption kRotations[] = {
-    { "None",    0 },
-    { "90\xc2\xb0 CW",  1 },
-    { "180\xc2\xb0",    2 },
-    { "90\xc2\xb0 CCW", 3 },
-    { "Flip H",  4 },
-    { "Flip V",  5 },
-};
 
 static std::string BuildArgs(const Settings& s)
 {
@@ -93,18 +80,7 @@ static std::string BuildArgs(const Settings& s)
     if (s.pin)           append("-pin");
     if (s.password[0])   { append("-pw"); append(std::string("\"") + s.password + "\""); }
 
-    // Video sink — inject rotate-method into the sink property when rotation != None
-    {
-        const char* sf = kVideoSinks[s.videoSinkIdx].flag; // e.g. "-vs d3d11videosink"
-        if (sf[0] && s.rotationIdx != 0) {
-            char buf[128];
-            snprintf(buf, sizeof(buf), "-vs \"%s rotate-method=%d\"",
-                     sf + 4, kRotations[s.rotationIdx].method); // sf+4 skips "-vs "
-            append(buf);
-        } else {
-            append(sf);
-        }
-    }
+    append(kVideoSinks[s.videoSinkIdx].flag);
     append(kVideoDecoders[s.videoDecoderIdx].flag);
     if (s.h265) append("-h265");
     append(kAudioSinks[s.audioSinkIdx].flag);
@@ -135,7 +111,6 @@ static void SaveSettings(const Settings& s, const std::string& path)
     f << "videoDecoderIdx=" << s.videoDecoderIdx << "\n";
     f << "h265="            << (s.h265 ? 1 : 0) << "\n";
     f << "audioSinkIdx="    << s.audioSinkIdx  << "\n";
-    f << "rotationIdx="     << s.rotationIdx   << "\n";
     f << "volume="          << s.volume        << "\n";
     f << "noFreeze="        << (s.noFreeze ? 1 : 0) << "\n";
     f << "debug="           << (s.debug ? 1 : 0) << "\n";
@@ -162,7 +137,6 @@ static void LoadSettings(Settings& s, const std::string& path)
         else if (key == "videoDecoderIdx") s.videoDecoderIdx = std::stoi(val);
         else if (key == "h265")           s.h265 = (val == "1");
         else if (key == "audioSinkIdx")   s.audioSinkIdx    = std::stoi(val);
-        else if (key == "rotationIdx")    s.rotationIdx = std::stoi(val);
         else if (key == "volume")         s.volume = std::stof(val);
         else if (key == "noFreeze")       s.noFreeze = (val == "1");
         else if (key == "debug")          s.debug = (val == "1");
@@ -172,7 +146,6 @@ static void LoadSettings(Settings& s, const std::string& path)
     clamp(s.videoSinkIdx,    0, (int)(sizeof(kVideoSinks)    / sizeof(*kVideoSinks))    - 1);
     clamp(s.videoDecoderIdx, 0, (int)(sizeof(kVideoDecoders) / sizeof(*kVideoDecoders)) - 1);
     clamp(s.audioSinkIdx,    0, (int)(sizeof(kAudioSinks)    / sizeof(*kAudioSinks))    - 1);
-    clamp(s.rotationIdx,     0, (int)(sizeof(kRotations)     / sizeof(*kRotations))     - 1);
     if (s.volume < 0.0f) s.volume = 0.0f;
     if (s.volume > 1.0f) s.volume = 1.0f;
 }
@@ -233,6 +206,73 @@ static void StopUxPlay()
     TerminateProcess(g_hProcess, 0);
     CloseHandle(g_hProcess); g_hProcess = NULL;
     CloseHandle(g_hThread);  g_hThread  = NULL;
+}
+
+// ── Display rotation (window-level, no stream reconnect) ──────────────────────
+
+static HWND FindProcessWindow()
+{
+    if (!IsUxPlayRunning()) return NULL;
+    DWORD targetPid = GetProcessId(g_hProcess);
+    struct Ctx { DWORD pid; HWND hwnd; };
+    Ctx ctx = { targetPid, NULL };
+    EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
+        auto* c = reinterpret_cast<Ctx*>(lp);
+        DWORD wpid = 0;
+        GetWindowThreadProcessId(hwnd, &wpid);
+        if (wpid == c->pid && IsWindowVisible(hwnd)) { c->hwnd = hwnd; return FALSE; }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&ctx));
+    return ctx.hwnd;
+}
+
+static HMONITOR GetUxPlayMonitor()
+{
+    HWND uw = FindProcessWindow();
+    return uw ? MonitorFromWindow(uw, MONITOR_DEFAULTTONEAREST)
+              : MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
+}
+
+static const char* OrientationName(DWORD o)
+{
+    switch (o) {
+    case DMDO_DEFAULT: return "0\xc2\xb0";
+    case DMDO_90:      return "90\xc2\xb0";
+    case DMDO_180:     return "180\xc2\xb0";
+    case DMDO_270:     return "270\xc2\xb0";
+    default:           return "?";
+    }
+}
+
+static DWORD CurrentOrientation(HMONITOR hMon)
+{
+    MONITORINFOEXW mi = {};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(hMon, &mi)) return DMDO_DEFAULT;
+    DEVMODEW dm = {};
+    dm.dmSize = sizeof(dm);
+    EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm);
+    return dm.dmDisplayOrientation;
+}
+
+static void CycleDisplayRotation()
+{
+    HMONITOR hMon = GetUxPlayMonitor();
+    MONITORINFOEXW mi = {};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(hMon, &mi)) return;
+    DEVMODEW dm = {};
+    dm.dmSize = sizeof(dm);
+    if (!EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm)) return;
+
+    DWORD next = (dm.dmDisplayOrientation + 1) % 4;
+    // swap pixel dimensions when crossing landscape<->portrait boundary
+    bool curPortrait  = (dm.dmDisplayOrientation & 1) != 0;
+    bool nextPortrait = (next & 1) != 0;
+    if (curPortrait != nextPortrait) std::swap(dm.dmPelsWidth, dm.dmPelsHeight);
+    dm.dmDisplayOrientation = next;
+    dm.dmFields = DM_DISPLAYORIENTATION | DM_PELSWIDTH | DM_PELSHEIGHT;
+    ChangeDisplaySettingsExW(mi.szDevice, &dm, NULL, CDS_UPDATEREGISTRY | CDS_RESET, NULL);
 }
 
 // ── System tray ───────────────────────────────────────────────────────────────
@@ -513,12 +553,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
 
         ImGui::Checkbox("H.265 / 4K support (-h265)", &settings.h265);
 
+        // Rotation acts on the display directly — no reconnect needed
         {
-            int n = (int)(sizeof(kRotations) / sizeof(*kRotations));
-            if (ImGui::Button("Cycle rotation"))
-                settings.rotationIdx = (settings.rotationIdx + 1) % n;
+            HMONITOR hMon = GetUxPlayMonitor();
+            DWORD orient = CurrentOrientation(hMon);
+            if (ImGui::Button("Rotate display 90\xc2\xb0"))
+                CycleDisplayRotation();
             ImGui::SameLine();
-            ImGui::Text("%s", kRotations[settings.rotationIdx].label);
+            ImGui::Text("%s%s", OrientationName(orient),
+                        IsUxPlayRunning() ? "" : " (primary)");
         }
 
         // ── Audio ──────────────────────────────────────────────────────────
