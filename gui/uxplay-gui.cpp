@@ -35,9 +35,10 @@ struct Settings {
     char  password[128]   = "";
     int   videoSinkIdx    = 0;
     int   videoDecoderIdx = 3;  // default: Auto (decodebin), graceful hardware fallback
-    bool  h265            = false;
+    bool  h265            = true;
     int   audioSinkIdx    = 0;
     float volume          = 1.0f;
+    int   fps             = 0;    // 0 = use uxplay default; 1-256 = pass -fps N
     bool  noFreeze        = false;
     bool  debug           = false;
     char  extraArgs[256]  = "";
@@ -83,6 +84,7 @@ static std::string BuildArgs(const Settings& s)
     append(kVideoSinks[s.videoSinkIdx].flag);
     append(kVideoDecoders[s.videoDecoderIdx].flag);
     if (s.h265) append("-h265");
+    if (s.fps > 0) { append("-fps"); append(std::to_string(s.fps)); }
     append(kAudioSinks[s.audioSinkIdx].flag);
     if (s.volume < 0.995f) {
         char vbuf[16]; snprintf(vbuf, sizeof(vbuf), "%.2f", s.volume);
@@ -112,6 +114,7 @@ static void SaveSettings(const Settings& s, const std::string& path)
     f << "h265="            << (s.h265 ? 1 : 0) << "\n";
     f << "audioSinkIdx="    << s.audioSinkIdx  << "\n";
     f << "volume="          << s.volume        << "\n";
+    f << "fps="             << s.fps           << "\n";
     f << "noFreeze="        << (s.noFreeze ? 1 : 0) << "\n";
     f << "debug="           << (s.debug ? 1 : 0) << "\n";
     f << "extraArgs="       << s.extraArgs     << "\n";
@@ -138,6 +141,7 @@ static void LoadSettings(Settings& s, const std::string& path)
         else if (key == "h265")           s.h265 = (val == "1");
         else if (key == "audioSinkIdx")   s.audioSinkIdx    = std::stoi(val);
         else if (key == "volume")         s.volume = std::stof(val);
+        else if (key == "fps")            s.fps = std::stoi(val);
         else if (key == "noFreeze")       s.noFreeze = (val == "1");
         else if (key == "debug")          s.debug = (val == "1");
         else if (key == "extraArgs")      strncpy(s.extraArgs,  val.c_str(), sizeof(s.extraArgs) - 1);
@@ -148,6 +152,7 @@ static void LoadSettings(Settings& s, const std::string& path)
     clamp(s.audioSinkIdx,    0, (int)(sizeof(kAudioSinks)    / sizeof(*kAudioSinks))    - 1);
     if (s.volume < 0.0f) s.volume = 0.0f;
     if (s.volume > 1.0f) s.volume = 1.0f;
+    if (s.fps < 0 || s.fps > 256) s.fps = 0;
 }
 
 // ── Process management ────────────────────────────────────────────────────────
@@ -573,6 +578,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
 
         ImGui::SetNextItemWidth(220);
         ImGui::SliderFloat("Volume (-vol)", &settings.volume, 0.0f, 1.0f, "%.2f");
+
+        ImGui::SetNextItemWidth(220);
+        ImGui::SliderInt("FPS limit (-fps)", &settings.fps, 0, 256,
+                         settings.fps == 0 ? "Default" : "%d fps");
 
         // ── Advanced ────────────────────────────────────────────────────────
         ImGui::SeparatorText("Advanced");
