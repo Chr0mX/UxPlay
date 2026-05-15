@@ -213,7 +213,10 @@ static void StopUxPlay()
     CloseHandle(g_hThread);  g_hThread  = NULL;
 }
 
-// ── Display rotation (window-level, no stream reconnect) ──────────────────────
+// ── Player window rotation overlay (GDI PlgBlt, no stream reconnect) ──────────
+
+static HWND   g_hOverlay   = NULL;
+static int    g_overlayRot = 0;   // 0=none, 1=90°CW, 2=180°, 3=270°CW
 
 static HWND FindProcessWindow()
 {
@@ -231,53 +234,83 @@ static HWND FindProcessWindow()
     return ctx.hwnd;
 }
 
-static HMONITOR GetUxPlayMonitor()
+static void UpdateOverlay()
 {
-    HWND uw = FindProcessWindow();
-    return uw ? MonitorFromWindow(uw, MONITOR_DEFAULTTONEAREST)
-              : MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
-}
+    if (!g_hOverlay || !IsWindow(g_hOverlay)) return;
 
-static const char* OrientationName(DWORD o)
-{
-    switch (o) {
-    case DMDO_DEFAULT: return "0\xc2\xb0";
-    case DMDO_90:      return "90\xc2\xb0";
-    case DMDO_180:     return "180\xc2\xb0";
-    case DMDO_270:     return "270\xc2\xb0";
-    default:           return "?";
+    HWND hUx = FindProcessWindow();
+    if (!hUx || !IsWindow(hUx)) {
+        ShowWindow(g_hOverlay, SW_HIDE);
+        return;
     }
+
+    RECT uxRect;
+    GetWindowRect(hUx, &uxRect);
+    int sw = uxRect.right  - uxRect.left;
+    int sh = uxRect.bottom - uxRect.top;
+    if (sw <= 0 || sh <= 0) return;
+
+    bool swapDims = (g_overlayRot & 1);
+    int ow = swapDims ? sh : sw;
+    int oh = swapDims ? sw : sh;
+
+    SetWindowPos(g_hOverlay, HWND_TOPMOST,
+                 uxRect.left, uxRect.top, ow, oh,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+    HDC hdcScreen  = GetDC(NULL);
+    HDC hdcCapture = CreateCompatibleDC(hdcScreen);
+    HBITMAP hbmCap = CreateCompatibleBitmap(hdcScreen, sw, sh);
+    SelectObject(hdcCapture, hbmCap);
+    PrintWindow(hUx, hdcCapture, PW_RENDERFULLCONTENT);
+
+    HDC hdcOut  = CreateCompatibleDC(hdcScreen);
+    HBITMAP hbmOut = CreateCompatibleBitmap(hdcScreen, ow, oh);
+    SelectObject(hdcOut, hbmOut);
+
+    POINT pts[3];
+    switch (g_overlayRot) {
+    case 1: pts[0]={sh-1,0}; pts[1]={sh-1,sw-1}; pts[2]={0,0};       break; // 90° CW
+    case 2: pts[0]={sw-1,sh-1}; pts[1]={0,sh-1}; pts[2]={sw-1,0};    break; // 180°
+    case 3: pts[0]={0,sw-1}; pts[1]={0,0}; pts[2]={sh-1,sw-1};       break; // 270° CW
+    default: BitBlt(hdcOut, 0, 0, sw, sh, hdcCapture, 0, 0, SRCCOPY); goto done_blt;
+    }
+    PlgBlt(hdcOut, pts, hdcCapture, 0, 0, sw, sh, NULL, 0, 0);
+    done_blt:;
+
+    POINT    ptSrc = {0, 0};
+    SIZE     sz    = {ow, oh};
+    BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, 0};
+    UpdateLayeredWindow(g_hOverlay, hdcScreen, NULL, &sz, hdcOut, &ptSrc, 0, &bf, ULW_OPAQUE);
+
+    DeleteObject(hbmOut);   DeleteDC(hdcOut);
+    DeleteObject(hbmCap);   DeleteDC(hdcCapture);
+    ReleaseDC(NULL, hdcScreen);
 }
 
-static DWORD CurrentOrientation(HMONITOR hMon)
+static LRESULT WINAPI OverlayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    MONITORINFOEXW mi = {};
-    mi.cbSize = sizeof(mi);
-    if (!GetMonitorInfoW(hMon, &mi)) return DMDO_DEFAULT;
-    DEVMODEW dm = {};
-    dm.dmSize = sizeof(dm);
-    EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm);
-    return dm.dmDisplayOrientation;
+    if (msg == WM_TIMER && wParam == 1) { UpdateOverlay(); return 0; }
+    if (msg == WM_PAINT) { PAINTSTRUCT ps; BeginPaint(hWnd, &ps); EndPaint(hWnd, &ps); return 0; }
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
-static void CycleDisplayRotation()
+static void SetOverlayRotation(int rot)
 {
-    HMONITOR hMon = GetUxPlayMonitor();
-    MONITORINFOEXW mi = {};
-    mi.cbSize = sizeof(mi);
-    if (!GetMonitorInfoW(hMon, &mi)) return;
-    DEVMODEW dm = {};
-    dm.dmSize = sizeof(dm);
-    if (!EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm)) return;
-
-    DWORD next = (dm.dmDisplayOrientation + 1) % 4;
-    // swap pixel dimensions when crossing landscape<->portrait boundary
-    bool curPortrait  = (dm.dmDisplayOrientation & 1) != 0;
-    bool nextPortrait = (next & 1) != 0;
-    if (curPortrait != nextPortrait) std::swap(dm.dmPelsWidth, dm.dmPelsHeight);
-    dm.dmDisplayOrientation = next;
-    dm.dmFields = DM_DISPLAYORIENTATION | DM_PELSWIDTH | DM_PELSHEIGHT;
-    ChangeDisplaySettingsExW(mi.szDevice, &dm, NULL, CDS_UPDATEREGISTRY | CDS_RESET, NULL);
+    g_overlayRot = rot & 3;
+    if (g_overlayRot == 0) {
+        if (g_hOverlay) { KillTimer(g_hOverlay, 1); DestroyWindow(g_hOverlay); g_hOverlay = NULL; }
+        return;
+    }
+    if (!g_hOverlay) {
+        g_hOverlay = CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
+            L"UxPlayRotOverlay", NULL, WS_POPUP,
+            0, 0, 100, 100, NULL, NULL, GetModuleHandleW(NULL), NULL);
+        if (!g_hOverlay) return;
+        SetTimer(g_hOverlay, 1, 33, NULL);  // ~30 fps update
+    }
+    UpdateOverlay();
 }
 
 // ── System tray ───────────────────────────────────────────────────────────────
@@ -465,7 +498,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     Settings settings;
     LoadSettings(settings, iniPath);
 
-    // Register window class
+    // Register window classes
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
     wc.style = CS_CLASSDC;
@@ -474,6 +507,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.lpszClassName = L"UxPlayGUI";
     RegisterClassExW(&wc);
+
+    WNDCLASSEXW wcOv = {};
+    wcOv.cbSize = sizeof(wcOv);
+    wcOv.lpfnWndProc = OverlayWndProc;
+    wcOv.hInstance = hInst;
+    wcOv.lpszClassName = L"UxPlayRotOverlay";
+    RegisterClassExW(&wcOv);
 
     HWND hwnd = CreateWindowW(L"UxPlayGUI", L"UxPlay Launcher",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
@@ -558,15 +598,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
 
         ImGui::Checkbox("H.265 / 4K support (-h265)", &settings.h265);
 
-        // Rotation acts on the display directly — no reconnect needed
+        // Rotate only the uxplay player window via a GDI overlay
         {
-            HMONITOR hMon = GetUxPlayMonitor();
-            DWORD orient = CurrentOrientation(hMon);
-            if (ImGui::Button("Rotate display 90\xc2\xb0"))
-                CycleDisplayRotation();
+            static const char* kRotLabels[] = {"0\xc2\xb0", "90\xc2\xb0 CW", "180\xc2\xb0", "270\xc2\xb0 CW"};
+            bool uxRunning = IsUxPlayRunning();
+            ImGui::BeginDisabled(!uxRunning);
+            if (ImGui::Button("Rotate window 90\xc2\xb0 CW"))
+                SetOverlayRotation((g_overlayRot + 1) % 4);
             ImGui::SameLine();
-            ImGui::Text("%s%s", OrientationName(orient),
-                        IsUxPlayRunning() ? "" : " (primary)");
+            if (g_overlayRot != 0 && ImGui::Button("Reset rotation"))
+                SetOverlayRotation(0);
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextDisabled("Current: %s%s", kRotLabels[g_overlayRot],
+                                uxRunning ? "" : "  (launch first)");
         }
 
         // ── Audio ──────────────────────────────────────────────────────────
@@ -631,6 +676,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     }
 
     // Cleanup
+    SetOverlayRotation(0);  // destroy overlay window + timer
     StopUxPlay();
     Shell_NotifyIconW(NIM_DELETE, &g_nid);
     ImGui_ImplDX11_Shutdown();
@@ -639,5 +685,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     CleanupDeviceD3D();
     DestroyWindow(hwnd);
     UnregisterClassW(wc.lpszClassName, hInst);
+    UnregisterClassW(wcOv.lpszClassName, hInst);
     return 0;
 }

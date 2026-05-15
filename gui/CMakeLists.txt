@@ -24,5 +24,5 @@ target_include_directories(uxplay-gui PRIVATE
   ${imgui_SOURCE_DIR}/backends
 )
 
-target_link_libraries(uxplay-gui PRIVATE d3d11 dxgi d3dcompiler dwmapi)
+target_link_libraries(uxplay-gui PRIVATE d3d11 dxgi d3dcompiler dwmapi gdi32 user32)
 target_compile_definitions(uxplay-gui PRIVATE UNICODE _UNICODE)
