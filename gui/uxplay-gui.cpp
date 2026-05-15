@@ -38,7 +38,7 @@ struct Settings {
     bool  h265            = true;
     int   audioSinkIdx    = 0;
     float volume          = 1.0f;
-    int   fps             = 0;    // 0 = use uxplay default; 1-256 = pass -fps N
+    int   fps             = 60;
     bool  noFreeze        = false;
     bool  debug           = false;
     char  extraArgs[256]  = "";
