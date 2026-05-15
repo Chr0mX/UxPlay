@@ -46,6 +46,15 @@ jobs:
             mingw-w64-ucrt-x86_64-ntldd
             zip
 
+      - name: Extract version
+        id: ver
+        run: |
+          V=$(grep -m1 'set.*UXPLAY_VERSION\|project.*VERSION' CMakeLists.txt \
+            | grep -oP '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1 || true)
+          [ -z "$V" ] && V=$(git describe --tags --abbrev=0 2>/dev/null | tr -d 'v' || echo "dev")
+          echo "value=$V" >> "$GITHUB_OUTPUT"
+          echo "Version: $V"
+
       - name: Acquire Bonjour dnssd.dll
         shell: pwsh
         # dnssd.dll is the Bonjour mDNS client library; needed at runtime alongside

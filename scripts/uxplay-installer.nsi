@@ -1,12 +1,9 @@
 ; UxPlay Windows Installer
 ; Built with NSIS (Nullsoft Scriptable Install System)
 ; Invoke: makensis /DVERSION=x.y.z scripts\uxplay-installer.nsi
-;         (run from repo root so File paths resolve correctly)
-
-; NSIS resolves File/OutFile relative to the script's directory by default.
-; !cd ".." moves the compile-time working directory up to the repo root so
-; "uxplay-windows-portable\*.*" and the OutFile path both resolve correctly.
-!cd ".."
+;
+; NSIS resolves relative paths from the script's own directory (scripts\).
+; All paths that reference the repo root use ".." explicitly.
 
 !ifndef VERSION
   !define VERSION "dev"
@@ -23,7 +20,7 @@ Unicode True
 SetCompressor /SOLID lzma
 
 Name           "${PRODUCT_NAME} ${PRODUCT_VER}"
-OutFile        "uxplay-windows-installer.exe"
+OutFile        "..\uxplay-windows-installer.exe"
 InstallDir     "$PROGRAMFILES64\UxPlay"
 InstallDirRegKey HKLM "${INST_REG}" "InstallDir"
 RequestExecutionLevel admin
@@ -61,7 +58,7 @@ Section "UxPlay (required)" SEC_MAIN
   SectionIn RO
 
   SetOutPath "$INSTDIR"
-  File /r "uxplay-windows-portable\*.*"
+  File /r "..\uxplay-windows-portable\*.*"
 
   ; Firewall: allow inbound on all profiles
   ExecWait 'netsh advfirewall firewall delete rule name="UxPlay"'
