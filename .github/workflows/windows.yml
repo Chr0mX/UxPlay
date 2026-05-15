@@ -44,17 +44,7 @@ jobs:
             mingw-w64-ucrt-x86_64-gst-plugins-ugly
             mingw-w64-ucrt-x86_64-gst-libav
             mingw-w64-ucrt-x86_64-ntldd
-            mingw-w64-ucrt-x86_64-directx-headers
             zip
-
-      - name: Extract version
-        id: ver
-        run: |
-          V=$(grep -m1 'set.*UXPLAY_VERSION\|project.*VERSION' CMakeLists.txt \
-            | grep -oP '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1 || true)
-          [ -z "$V" ] && V=$(git describe --tags --abbrev=0 2>/dev/null | tr -d 'v' || echo "dev")
-          echo "value=$V" >> "$GITHUB_OUTPUT"
-          echo "Version: $V"
 
       - name: Acquire Bonjour dnssd.dll
         shell: pwsh
@@ -79,6 +69,7 @@ jobs:
           }
 
           # ── Method 2: Silent install of Apple Bonjour Print Services ─────────
+          # BonjourPSSetup.exe is an NSIS installer; /S runs it silently.
           if (-not $found) {
             Write-Host "Trying: Apple Bonjour Print Services silent install..."
             try {
@@ -115,10 +106,12 @@ jobs:
 
           if (-not $found) {
             Write-Host "WARNING: dnssd.dll not acquired. Users must install Apple Bonjour for Windows."
+            Write-Host "Bonjour is bundled with iTunes, iCloud for Windows, or available standalone from Apple."
             Set-Content "scripts\dnssd.dll.missing" `
               "Install Apple Bonjour for Windows to enable AirPlay discovery."
           }
 
+          # Always exit 0 — missing dnssd.dll is a runtime (not build) concern.
           exit 0
 
       - name: Configure CMake

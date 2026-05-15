@@ -68,19 +68,67 @@ ntldd -R "${DIST_DIR}/uxplay.exe" 2>/dev/null \
       fi
     done
 
-# ── GStreamer plugins — copy ALL of them ─────────────────────────────────────
-# A curated list misses elements as UxPlay evolves; copying everything is
-# robust, and GStreamer gracefully skips plugins whose hardware isn't present.
-echo "==> Copying all GStreamer plugins from ${UCRT64_GST_PLUGINS}..."
-plugin_count=0
-for src in "${UCRT64_GST_PLUGINS}"/libgst*.dll; do
-  [ -f "${src}" ] || continue
-  plugin_name=$(basename "${src}")
-  # codec2json has an unresolvable external dependency and UxPlay never uses it
-  [ "${plugin_name}" = "libgstcodec2json.dll" ] && continue
-  cp "${src}" "${DIST_DIR}/gst-plugins/${plugin_name}"
-  echo "    + ${plugin_name}"
-  plugin_count=$((plugin_count + 1))
+# ── Curated GStreamer plugins ─────────────────────────────────────────────────
+# Ordered by importance. Optional ones are copied only if present.
+REQUIRED_PLUGINS=(
+  libgstcoreelements.dll       # essential: fakesink, filesink, queue, etc.
+  libgstapp.dll                # appsrc/appsink — used directly by UxPlay
+  libgstautodetect.dll         # autovideosink / autoaudiosink
+  libgstplayback.dll           # playbin2 / playbin3
+  libgsttypefindfunctions.dll  # format detection
+  libgstvolume.dll             # volume element — used in UxPlay audio pipeline
+  libgstvideoconvertscale.dll  # colorspace conversion + scaling
+  libgstaudioconvert.dll       # audio format conversion
+  libgstaudioresample.dll      # audio sample-rate conversion
+  libgstd3d11.dll              # D3D11 video sink + DXVA2/D3D11VA hw decode
+  libgstdirectsound.dll        # DirectSound audio output
+  libgstvideoparsersbad.dll    # H.264 / H.265 / HEVC parsers
+  libgstaudioparsers.dll       # AAC / AC3 / MP3 parsers
+  libgstisomp4.dll             # MP4 / fragmented MP4 demuxer (HLS)
+  libgstlibav.dll              # FFmpeg-based software decoders (fallback)
+)
+
+OPTIONAL_PLUGINS=(
+  libgstopengl.dll             # OpenGL video sink (optional)
+  libgstd3d12.dll              # D3D12 video sink (optional, newer GStreamer)
+  libgstnvcodec.dll            # NVIDIA NVDEC hardware decode (optional)
+  libgstamfcodec.dll           # AMD AMF hardware decode (optional)
+  libgstqsvcodec.dll           # Intel QSV hardware decode (optional)
+  libgstwasapi.dll             # Windows Audio Session API (alternative audio)
+  libgstwasapi2.dll            # WASAPI2 audio sink (alternative audio)
+  libgstasio.dll               # ASIO audio (optional)
+  libgstvideofilter.dll        # Video filters (flip, rotate, etc.)
+  libgstdeinterlace.dll        # Deinterlacing
+  libgstinter.dll              # Inter-plugin communication
+)
+
+echo "==> Copying GStreamer plugins..."
+for plugin in "${REQUIRED_PLUGINS[@]}"; do
+  src="${UCRT64_GST_PLUGINS}/${plugin}"
+  if [ -f "${src}" ]; then
+    echo "    + ${plugin}"
+    cp "${src}" "${DIST_DIR}/gst-plugins/${plugin}"
+  else
+    echo "    ! MISSING (required): ${plugin}"
+    # Try to locate the plugin that provides the element name via gst-inspect-1.0
+    element="${plugin#libgst}"       # strip libgst prefix
+    element="${element%.dll}"         # strip .dll suffix
+    found_dll=$(gst-inspect-1.0 "${element}" 2>/dev/null \
+      | grep -i "Filename:" | awk '{print $2}' | head -1)
+    if [ -n "${found_dll}" ] && [ -f "${found_dll}" ]; then
+      found_name=$(basename "${found_dll}")
+      echo "    ~ found via gst-inspect as ${found_name}"
+      cp "${found_dll}" "${DIST_DIR}/gst-plugins/${found_name}"
+    fi
+  fi
+done
+
+for plugin in "${OPTIONAL_PLUGINS[@]}"; do
+  src="${UCRT64_GST_PLUGINS}/${plugin}"
+  if [ -f "${src}" ]; then
+    echo "    + ${plugin} (optional)"
+    cp "${src}" "${DIST_DIR}/gst-plugins/${plugin}"
+  fi
 done
 echo "    ${plugin_count} plugins copied."
 
@@ -235,18 +283,10 @@ READMEEOF
 
 # ── Rename staging dir to the final portable folder name ──────────────────────
 cd "${REPO_ROOT}"
-rm -rf uxplay-windows-portable
-mv dist uxplay-windows-portable
-
-# ── Create ZIP — files at root so extracting doesn't double-nest ──────────────
-# Zip from inside the folder: "Extract All" creates one folder from the zip
-# name and places files directly inside — no uxplay-windows-portable\uxplay-windows-portable\.
-echo "==> Creating uxplay-windows-portable.zip..."
-pushd uxplay-windows-portable
 if command -v zip &>/dev/null; then
-  zip -r ../uxplay-windows-portable.zip . -x "*.missing" -x "./.missing"
+  zip -r "${ZIP_NAME}" dist/ -x "*.missing"
 else
-  7z a -tzip ../uxplay-windows-portable.zip . -xr!"*.missing"
+  # Fallback: use 7-Zip (always available on Windows GitHub runners)
+  7z a -tzip "${ZIP_NAME}" ./dist/ -xr!"*.missing"
 fi
-popd
-echo "==> Done: uxplay-windows-portable.zip ($(du -sh uxplay-windows-portable.zip | cut -f1))"
+echo "==> Done: ${ZIP_NAME} ($(du -sh "${ZIP_NAME}" | cut -f1))"
