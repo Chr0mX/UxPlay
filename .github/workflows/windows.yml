@@ -14,7 +14,7 @@ on:
 
 jobs:
   build-windows:
-    name: Build Windows Portable ZIP
+    name: Build Windows Portable ZIP + Installer
     runs-on: windows-latest
 
     defaults:
@@ -47,6 +47,15 @@ jobs:
             mingw-w64-ucrt-x86_64-directx-headers
             zip
 
+      - name: Extract version
+        id: ver
+        run: |
+          V=$(grep -m1 'set.*UXPLAY_VERSION\|project.*VERSION' CMakeLists.txt \
+            | grep -oP '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1 || true)
+          [ -z "$V" ] && V=$(git describe --tags --abbrev=0 2>/dev/null | tr -d 'v' || echo "dev")
+          echo "value=$V" >> "$GITHUB_OUTPUT"
+          echo "Version: $V"
+
       - name: Acquire Bonjour dnssd.dll
         shell: pwsh
         # dnssd.dll is the Bonjour mDNS client library; needed at runtime alongside
@@ -70,7 +79,6 @@ jobs:
           }
 
           # ── Method 2: Silent install of Apple Bonjour Print Services ─────────
-          # BonjourPSSetup.exe is an NSIS installer; /S runs it silently.
           if (-not $found) {
             Write-Host "Trying: Apple Bonjour Print Services silent install..."
             try {
@@ -107,12 +115,10 @@ jobs:
 
           if (-not $found) {
             Write-Host "WARNING: dnssd.dll not acquired. Users must install Apple Bonjour for Windows."
-            Write-Host "Bonjour is bundled with iTunes, iCloud for Windows, or available standalone from Apple."
             Set-Content "scripts\dnssd.dll.missing" `
               "Install Apple Bonjour for Windows to enable AirPlay discovery."
           }
 
-          # Always exit 0 — missing dnssd.dll is a runtime (not build) concern.
           exit 0
 
       - name: Configure CMake
@@ -127,18 +133,47 @@ jobs:
       - name: Package portable ZIP
         run: bash scripts/package-windows.sh
 
-      - name: Upload artifact
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = "${{ steps.ver.outputs.value }}"
+          $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          if (-not (Test-Path $makensis)) {
+            $makensis = (Get-Command makensis -ErrorAction SilentlyContinue)?.Source
+          }
+          if (-not $makensis) {
+            Write-Host "WARNING: NSIS not found — skipping installer build"
+            exit 0
+          }
+          Write-Host "Building installer with NSIS: $makensis (version $version)"
+          & $makensis /DVERSION="$version" "scripts\uxplay-installer.nsi"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "WARNING: NSIS build failed (exit $LASTEXITCODE) — portable ZIP still available"
+          }
+          exit 0
+
+      - name: Upload portable ZIP artifact
         uses: actions/upload-artifact@v4
         with:
           name: uxplay-windows-portable
-          path: uxplay-windows-*.zip
+          path: uxplay-windows-portable.zip
           if-no-files-found: error
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: uxplay-windows-installer
+          path: uxplay-windows-installer.exe
+          if-no-files-found: warn
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: uxplay-windows-*.zip
+          files: |
+            uxplay-windows-portable.zip
+            uxplay-windows-installer.exe
           draft: false
           prerelease: false
           generate_release_notes: true

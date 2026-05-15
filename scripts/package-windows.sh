@@ -233,13 +233,16 @@ TROUBLESHOOTING
 For full documentation, see docs/WINDOWS.md or the project README.
 READMEEOF
 
-# ── Create ZIP ────────────────────────────────────────────────────────────────
-echo "==> Creating ${ZIP_NAME}..."
+# ── Rename staging dir to the final portable folder name ──────────────────────
 cd "${REPO_ROOT}"
+rm -rf uxplay-windows-portable
+mv dist uxplay-windows-portable
+
+# ── Create ZIP with a clean top-level folder ──────────────────────────────────
+echo "==> Creating uxplay-windows-portable.zip..."
 if command -v zip &>/dev/null; then
-  zip -r "${ZIP_NAME}" dist/ -x "*.missing"
+  zip -r uxplay-windows-portable.zip uxplay-windows-portable/ -x "*.missing"
 else
-  # Fallback: use 7-Zip (always available on Windows GitHub runners)
-  7z a -tzip "${ZIP_NAME}" ./dist/ -xr!"*.missing"
+  7z a -tzip uxplay-windows-portable.zip ./uxplay-windows-portable/ -xr!"*.missing"
 fi
-echo "==> Done: ${ZIP_NAME} ($(du -sh "${ZIP_NAME}" | cut -f1))"
+echo "==> Done: uxplay-windows-portable.zip ($(du -sh uxplay-windows-portable.zip | cut -f1))"
