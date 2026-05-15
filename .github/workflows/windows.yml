@@ -142,15 +142,20 @@ jobs:
             $makensis = (Get-Command makensis -ErrorAction SilentlyContinue)?.Source
           }
           if (-not $makensis) {
-            Write-Host "WARNING: NSIS not found — skipping installer build"
-            exit 0
+            Write-Host "NSIS not found in standard paths — installing via choco..."
+            choco install nsis -y --no-progress 2>&1 | Out-Null
+            $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          }
+          if (-not (Test-Path $makensis)) {
+            Write-Error "NSIS still not found after install attempt — cannot build installer"
+            exit 1
           }
           Write-Host "Building installer with NSIS: $makensis (version $version)"
           & $makensis /DVERSION="$version" "scripts\uxplay-installer.nsi"
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "WARNING: NSIS build failed (exit $LASTEXITCODE) — portable ZIP still available"
+            Write-Error "NSIS build failed (exit $LASTEXITCODE)"
+            exit 1
           }
-          exit 0
 
       - name: Upload portable ZIP artifact
         uses: actions/upload-artifact@v4

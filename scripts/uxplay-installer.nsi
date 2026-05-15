@@ -3,6 +3,11 @@
 ; Invoke: makensis /DVERSION=x.y.z scripts\uxplay-installer.nsi
 ;         (run from repo root so File paths resolve correctly)
 
+; NSIS resolves File/OutFile relative to the script's directory by default.
+; !cd ".." moves the compile-time working directory up to the repo root so
+; "uxplay-windows-portable\*.*" and the OutFile path both resolve correctly.
+!cd ".."
+
 !ifndef VERSION
   !define VERSION "dev"
 !endif

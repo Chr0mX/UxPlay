@@ -238,11 +238,15 @@ cd "${REPO_ROOT}"
 rm -rf uxplay-windows-portable
 mv dist uxplay-windows-portable
 
-# ── Create ZIP with a clean top-level folder ──────────────────────────────────
+# ── Create ZIP — files at root so extracting doesn't double-nest ──────────────
+# Zip from inside the folder: "Extract All" creates one folder from the zip
+# name and places files directly inside — no uxplay-windows-portable\uxplay-windows-portable\.
 echo "==> Creating uxplay-windows-portable.zip..."
+pushd uxplay-windows-portable
 if command -v zip &>/dev/null; then
-  zip -r uxplay-windows-portable.zip uxplay-windows-portable/ -x "*.missing"
+  zip -r ../uxplay-windows-portable.zip . -x "*.missing" -x "./.missing"
 else
-  7z a -tzip uxplay-windows-portable.zip ./uxplay-windows-portable/ -xr!"*.missing"
+  7z a -tzip ../uxplay-windows-portable.zip . -xr!"*.missing"
 fi
+popd
 echo "==> Done: uxplay-windows-portable.zip ($(du -sh uxplay-windows-portable.zip | cut -f1))"
