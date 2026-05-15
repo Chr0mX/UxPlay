@@ -515,9 +515,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     wcOv.lpszClassName = L"UxPlayRotOverlay";
     RegisterClassExW(&wcOv);
 
+    // Size the window to fit all UI elements without scrolling.
+    // Compute required client area then adjust for non-client chrome.
+    const int kClientW = 500, kClientH = 660;
+    RECT rc = {0, 0, kClientW, kClientH};
+    AdjustWindowRect(&rc, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
     HWND hwnd = CreateWindowW(L"UxPlayGUI", L"UxPlay Launcher",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 500, 570, NULL, NULL, hInst, NULL);
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        rc.right - rc.left, rc.bottom - rc.top,
+        NULL, NULL, hInst, NULL);
 
     if (!CreateDeviceD3D(hwnd)) {
         CleanupDeviceD3D();
@@ -554,13 +561,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        // Fixed window filling the entire client area
+        // Fixed window filling the entire client area — no scroll bar
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(io.DisplaySize);
         ImGui::Begin("##main", NULL,
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-            ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoBringToFrontOnFocus);
+            ImGuiWindowFlags_NoTitleBar    | ImGuiWindowFlags_NoResize  |
+            ImGuiWindowFlags_NoMove        | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_NoScrollWithMouse);
 
         // ── Basic ──────────────────────────────────────────────────────────
         ImGui::SeparatorText("Basic");
@@ -598,6 +606,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
 
         ImGui::Checkbox("H.265 / 4K support (-h265)", &settings.h265);
 
+        ImGui::SetNextItemWidth(220);
+        ImGui::SliderInt("FPS (-fps)", &settings.fps, 0, 256,
+                         settings.fps == 0 ? "Default" : "%d fps");
+
         // Rotate only the uxplay player window via a GDI overlay
         {
             static const char* kRotLabels[] = {"0\xc2\xb0", "90\xc2\xb0 CW", "180\xc2\xb0", "270\xc2\xb0 CW"};
@@ -623,10 +635,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
 
         ImGui::SetNextItemWidth(220);
         ImGui::SliderFloat("Volume (-vol)", &settings.volume, 0.0f, 1.0f, "%.2f");
-
-        ImGui::SetNextItemWidth(220);
-        ImGui::SliderInt("FPS limit (-fps)", &settings.fps, 0, 256,
-                         settings.fps == 0 ? "Default" : "%d fps");
 
         // ── Advanced ────────────────────────────────────────────────────────
         ImGui::SeparatorText("Advanced");
