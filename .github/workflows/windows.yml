@@ -153,9 +153,14 @@ jobs:
             exit 1
           }
           Write-Host "Building installer with NSIS: $makensis (version $version)"
-          & $makensis /DVERSION="$version" "scripts\uxplay-installer.nsi"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "NSIS build failed (exit $LASTEXITCODE)"
+          # Copy NSI to repo root so NSIS compile dir == repo root and
+          # "uxplay-windows-portable\*.*" resolves without any path prefix.
+          Copy-Item "scripts\uxplay-installer.nsi" "uxplay-installer.nsi"
+          & $makensis /DVERSION="$version" "uxplay-installer.nsi"
+          $nsisExit = $LASTEXITCODE
+          Remove-Item "uxplay-installer.nsi" -ErrorAction SilentlyContinue
+          if ($nsisExit -ne 0) {
+            Write-Error "NSIS build failed (exit $nsisExit)"
             exit 1
           }
 

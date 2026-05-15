@@ -20,7 +20,7 @@ Unicode True
 SetCompressor /SOLID lzma
 
 Name           "${PRODUCT_NAME} ${PRODUCT_VER}"
-OutFile        "..\uxplay-windows-installer.exe"
+OutFile        "uxplay-windows-installer.exe"
 InstallDir     "$PROGRAMFILES64\UxPlay"
 InstallDirRegKey HKLM "${INST_REG}" "InstallDir"
 RequestExecutionLevel admin
@@ -58,7 +58,7 @@ Section "UxPlay (required)" SEC_MAIN
   SectionIn RO
 
   SetOutPath "$INSTDIR"
-  File /r "..\uxplay-windows-portable\*.*"
+  File /r "uxplay-windows-portable\*.*"
 
   ; Firewall: allow inbound on all profiles
   ExecWait 'netsh advfirewall firewall delete rule name="UxPlay"'
