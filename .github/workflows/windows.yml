@@ -14,7 +14,7 @@ on:
 
 jobs:
   build-windows:
-    name: Build Windows Portable ZIP
+    name: Build Windows Portable ZIP + Installer
     runs-on: windows-latest
 
     defaults:
@@ -126,20 +126,56 @@ jobs:
       - name: Package portable ZIP
         run: bash scripts/package-windows.sh
 
-      - name: Upload artifact
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = "${{ steps.ver.outputs.value }}"
+          $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          if (-not (Test-Path $makensis)) {
+            $makensis = (Get-Command makensis -ErrorAction SilentlyContinue)?.Source
+          }
+          if (-not $makensis) {
+            Write-Host "NSIS not found in standard paths — installing via choco..."
+            choco install nsis -y --no-progress 2>&1 | Out-Null
+            $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          }
+          if (-not (Test-Path $makensis)) {
+            Write-Error "NSIS still not found after install attempt — cannot build installer"
+            exit 1
+          }
+          Write-Host "Building installer with NSIS: $makensis (version $version)"
+          & $makensis /DVERSION="$version" "scripts\uxplay-installer.nsi"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "NSIS build failed (exit $LASTEXITCODE)"
+            exit 1
+          }
+
+      - name: Upload portable ZIP artifact
         uses: actions/upload-artifact@v4
         with:
           name: uxplay-windows-portable
-          path: uxplay-windows-*.zip
+          path: uxplay-windows-portable.zip
           if-no-files-found: error
 
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: uxplay-windows-installer
+          path: uxplay-windows-installer.exe
+          if-no-files-found: warn
+
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
-          files: uxplay-windows-*.zip
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('dev-{0}', github.run_number) }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('dev build #{0}', github.run_number) }}
+          files: |
+            uxplay-windows-portable.zip
+            uxplay-windows-installer.exe
           draft: false
-          prerelease: false
-          generate_release_notes: true
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/v') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

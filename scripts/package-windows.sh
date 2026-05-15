@@ -130,6 +130,7 @@ for plugin in "${OPTIONAL_PLUGINS[@]}"; do
     cp "${src}" "${DIST_DIR}/gst-plugins/${plugin}"
   fi
 done
+echo "    ${plugin_count} plugins copied."
 
 # GStreamer plugins also depend on DLLs; collect them too
 echo "==> Resolving GStreamer plugin DLL dependencies..."
@@ -196,6 +197,24 @@ rem Pass all arguments through to uxplay.exe
 "%UXPLAY_DIR%uxplay.exe" %*
 BATCHEOF
 
+# ── Copy GUI launcher ─────────────────────────────────────────────────────────
+if [ -f "${BUILD_DIR}/gui/uxplay-gui.exe" ]; then
+  cp "${BUILD_DIR}/gui/uxplay-gui.exe" "${DIST_DIR}/uxplay-gui.exe"
+  echo "==> Copied uxplay-gui.exe"
+  echo "==> Resolving uxplay-gui.exe DLL dependencies..."
+  ntldd -R "${DIST_DIR}/uxplay-gui.exe" 2>/dev/null \
+    | awk '{print $3}' \
+    | grep -i "ucrt64" \
+    | while read -r dep_path; do
+        dep_name=$(basename "${dep_path}")
+        if ! is_system_dll "${dep_name}" && [ ! -f "${DIST_DIR}/${dep_name}" ]; then
+          echo "    + ${dep_name} (gui dep)"
+          cp "${dep_path}" "${DIST_DIR}/${dep_name}"
+        fi
+      done || true
+else
+  echo "==> NOTE: uxplay-gui.exe not found in build/gui/ — skipping GUI launcher"
+fi
 # ── Copy Bluetooth beacon script (Windows module) ────────────────────────────
 BEACON_DIR="${REPO_ROOT}/Bluetooth_LE_beacon"
 if [ -d "${BEACON_DIR}" ]; then
@@ -262,8 +281,7 @@ TROUBLESHOOTING
 For full documentation, see docs/WINDOWS.md or the project README.
 READMEEOF
 
-# ── Create ZIP ────────────────────────────────────────────────────────────────
-echo "==> Creating ${ZIP_NAME}..."
+# ── Rename staging dir to the final portable folder name ──────────────────────
 cd "${REPO_ROOT}"
 if command -v zip &>/dev/null; then
   zip -r "${ZIP_NAME}" dist/ -x "*.missing"
