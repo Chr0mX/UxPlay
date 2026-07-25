@@ -114,6 +114,16 @@ jobs:
           # Always exit 0 — missing dnssd.dll is a runtime (not build) concern.
           exit 0
 
+      - name: Determine version
+        id: ver
+        run: |
+          VERSION=$(grep -m1 'set.*UXPLAY_VERSION\|project.*VERSION' "CMakeLists.txt" \
+            | grep -oP '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1 || true)
+          if [ -z "${VERSION}" ]; then
+            VERSION=$(git describe --tags --abbrev=0 2>/dev/null | tr -d 'v' || echo "dev")
+          fi
+          echo "value=${VERSION}" >> "$GITHUB_OUTPUT"
+
       - name: Configure CMake
         run: |
           cmake -B build -G Ninja \
@@ -125,6 +135,13 @@ jobs:
 
       - name: Package portable ZIP
         run: bash scripts/package-windows.sh
+
+      - name: Upload portable ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uxplay-windows-portable
+          path: uxplay-windows-portable.zip
+          if-no-files-found: error
 
       - name: Build installer
         shell: pwsh
@@ -150,13 +167,6 @@ jobs:
             exit 1
           }
 
-      - name: Upload portable ZIP artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: uxplay-windows-portable
-          path: uxplay-windows-portable.zip
-          if-no-files-found: error
-
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         if: always()
@@ -166,7 +176,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        if: always() && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('dev-{0}', github.run_number) }}

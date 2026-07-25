@@ -16,8 +16,8 @@ if [ -z "${VERSION}" ]; then
   VERSION=$(git -C "${REPO_ROOT}" describe --tags --abbrev=0 2>/dev/null | tr -d 'v' || echo "dev")
 fi
 
-DIST_DIR="${REPO_ROOT}/dist"
-ZIP_NAME="uxplay-windows-${VERSION}.zip"
+DIST_DIR="${REPO_ROOT}/uxplay-windows-portable"
+ZIP_NAME="uxplay-windows-portable.zip"
 
 echo "==> Packaging UxPlay ${VERSION} for Windows"
 echo "    UCRT64_BIN:         ${UCRT64_BIN}"
@@ -77,6 +77,7 @@ REQUIRED_PLUGINS=(
   libgstplayback.dll           # playbin2 / playbin3
   libgsttypefindfunctions.dll  # format detection
   libgstvolume.dll             # volume element — used in UxPlay audio pipeline
+  libgstlevel.dll              # level element — used unconditionally in UxPlay audio pipeline
   libgstvideoconvertscale.dll  # colorspace conversion + scaling
   libgstaudioconvert.dll       # audio format conversion
   libgstaudioresample.dll      # audio sample-rate conversion
@@ -130,6 +131,7 @@ for plugin in "${OPTIONAL_PLUGINS[@]}"; do
     cp "${src}" "${DIST_DIR}/gst-plugins/${plugin}"
   fi
 done
+plugin_count=$(find "${DIST_DIR}/gst-plugins" -maxdepth 1 -name '*.dll' | wc -l)
 echo "    ${plugin_count} plugins copied."
 
 # GStreamer plugins also depend on DLLs; collect them too
@@ -281,12 +283,12 @@ TROUBLESHOOTING
 For full documentation, see docs/WINDOWS.md or the project README.
 READMEEOF
 
-# ── Rename staging dir to the final portable folder name ──────────────────────
+# ── Zip the portable folder (also the tree NSIS packages into the installer) ──
 cd "${REPO_ROOT}"
 if command -v zip &>/dev/null; then
-  zip -r "${ZIP_NAME}" dist/ -x "*.missing"
+  zip -r "${ZIP_NAME}" uxplay-windows-portable/ -x "*.missing"
 else
   # Fallback: use 7-Zip (always available on Windows GitHub runners)
-  7z a -tzip "${ZIP_NAME}" ./dist/ -xr!"*.missing"
+  7z a -tzip "${ZIP_NAME}" ./uxplay-windows-portable/ -xr!"*.missing"
 fi
 echo "==> Done: ${ZIP_NAME} ($(du -sh "${ZIP_NAME}" | cut -f1))"
