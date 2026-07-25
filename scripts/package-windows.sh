@@ -130,6 +130,7 @@ for plugin in "${OPTIONAL_PLUGINS[@]}"; do
     cp "${src}" "${DIST_DIR}/gst-plugins/${plugin}"
   fi
 done
+plugin_count=$(find "${DIST_DIR}/gst-plugins" -maxdepth 1 -name '*.dll' | wc -l)
 echo "    ${plugin_count} plugins copied."
 
 # GStreamer plugins also depend on DLLs; collect them too
