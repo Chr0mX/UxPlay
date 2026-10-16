@@ -34,6 +34,9 @@ ShowInstDetails show
 !include "WinVer.nsh"
 
 !define MUI_ABORTWARNING
+; Same artwork as the app (embedded in uxplay-gui.exe and uxplay.exe)
+!define MUI_ICON   "gui\uxplay.ico"
+!define MUI_UNICON "gui\uxplay.ico"
 !define MUI_WELCOMEPAGE_TEXT \
   "This wizard will install UxPlay ${PRODUCT_VER} on your computer.$\r$\n$\r$\n\
 UxPlay turns your PC into an AirPlay receiver. Stream your iPhone or iPad \
@@ -77,6 +80,7 @@ Section "UxPlay (required)" SEC_MAIN
   WriteRegStr  HKLM "${UNINST_REG}" "Publisher"       "${PRODUCT_PUBL}"
   WriteRegStr  HKLM "${UNINST_REG}" "URLInfoAbout"    "${PRODUCT_URL}"
   WriteRegStr  HKLM "${UNINST_REG}" "InstallLocation" "$INSTDIR"
+  WriteRegStr  HKLM "${UNINST_REG}" "DisplayIcon"     "$INSTDIR\uxplay-gui.exe,0"
   WriteRegStr  HKLM "${UNINST_REG}" "UninstallString" '"$INSTDIR\uninstall.exe"'
   WriteRegDWORD HKLM "${UNINST_REG}" "NoModify" 1
   WriteRegDWORD HKLM "${UNINST_REG}" "NoRepair" 1

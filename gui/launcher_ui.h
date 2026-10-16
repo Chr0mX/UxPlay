@@ -6,6 +6,8 @@
 
 #include <string>
 #include "imgui.h"
+#include "prefs.h"
+#include "session.h"
 
 // ── Settings model ────────────────────────────────────────────────────────────
 
@@ -36,7 +38,8 @@ extern const int    kVideoSinkCount;
 extern const int    kVideoDecoderCount;
 extern const int    kAudioSinkCount;
 
-std::string BuildArgs(const Settings& s);
+// redact=true replaces the password with *** (for display and logs).
+std::string BuildArgs(const Settings& s, bool redact = false);
 std::string SerializeSettings(const Settings& s);                 // INI text
 void        ParseSettings(Settings& s, const std::string& text);  // INI text
 
@@ -47,34 +50,52 @@ struct UiFonts {
     ImFont* small  = nullptr;   // descriptions, captions
     ImFont* strong = nullptr;   // labels, buttons
     ImFont* title  = nullptr;   // page titles
-    ImFont* mono   = nullptr;   // command line, flags
+    ImFont* mono   = nullptr;   // command line, flags, console
 };
 
-// Operations the UI needs from the host platform.
+// Operations the UI needs from the host platform. Every menu item and button
+// calls one of these; the UI never manages processes or files itself.
 struct UiHost {
     bool (*isRunning)();
-    bool (*launch)(const Settings& s, std::string* error);
+    void (*start)(const Settings& s);      // reports success/failure through Session
     void (*stop)();
     bool (*save)(const Settings& s);
-    int  (*getRotation)();          // 0..3 quarter turns clockwise
+    int  (*getRotation)();                 // 0..3 quarter turns clockwise
     void (*setRotation)(int rot);
+    void (*openLogFile)();
+    void (*openLogFolder)();
+    void (*openSettingsFolder)();
+    void (*openDocs)();
+    void (*exitApp)();
+    void (*themeApplied)(bool dark);       // e.g. update the native title bar
+    const char* (*logStatus)();            // nullptr when logging works, else reason
 };
 
 struct UiState {
     int         page          = 0;
     std::string savedSnapshot;      // SerializeSettings() at last load/save
-    std::string error;              // persistent banner, dismissable
     std::string toast;
     double      toastUntil    = 0.0;
-    bool        wasRunning    = false;
-    bool        exited        = false;  // process ended on its own
-    double      runningSince  = 0.0;
+    bool        toastError    = false;
+    bool        consoleVisible = false;
+    bool        consoleFollow  = true;
+    char        consoleFilter[96] = "";
+    bool        showTechnical  = false;
+    bool        openAbout      = false;
+    bool        prefsDirty     = false;   // host persists UiPrefs when set
+    bool        systemDark     = true;    // host: OS app theme
+    bool        reduceMotion   = false;   // host: OS animation preference
+    int         appliedTheme   = -1;      // -1 none, 0 light, 1 dark
+    int         seenErrorSerial = 0;
+    float       scale          = 1.0f;
+    std::string launcherVersion = "dev";
 };
 
 // Loads fonts at the given DPI scale. Missing files fall back to ImGui's default.
 UiFonts LoadUiFonts(float scale, const char* regularTtf, const char* boldTtf, const char* monoTtf);
-void    ApplyUiTheme(float scale);
-void    DrawLauncherUI(Settings& s, UiState& ui, const UiHost& host, const UiFonts& fonts);
+void    ApplyUiTheme(float scale, bool dark);
+void    DrawLauncherUI(Settings& s, UiState& ui, Session& session, UiPrefs& prefs,
+                       const UiHost& host, const UiFonts& fonts);
 
-// Background color the host should clear to (matches the sidebar/content base).
+// Background color the host should clear to (matches the current theme).
 ImVec4  UiClearColor();
