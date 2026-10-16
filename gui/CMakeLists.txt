@@ -11,6 +11,7 @@ FetchContent_MakeAvailable(imgui)
 
 add_executable(uxplay-gui WIN32
   uxplay-gui.cpp
+  launcher_ui.cpp
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
   ${imgui_SOURCE_DIR}/imgui_tables.cpp

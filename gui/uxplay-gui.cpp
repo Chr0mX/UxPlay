@@ -23,136 +23,26 @@
 #include "imgui.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
+#include "launcher_ui.h"
 
-// ── Settings ──────────────────────────────────────────────────────────────────
-
-struct Settings {
-    char  serverName[128] = "";
-    int   port            = 7100;
-    bool  fullscreen      = false;
-    char  windowSize[32]  = "1920x1080";
-    bool  pin             = false;
-    char  password[128]   = "";
-    int   videoSinkIdx    = 0;
-    int   videoDecoderIdx = 3;  // default: Auto (decodebin), graceful hardware fallback
-    bool  h265            = true;
-    int   audioSinkIdx    = 0;
-    float volume          = 1.0f;
-    int   fps             = 60;
-    bool  noFreeze        = false;
-    bool  debug           = false;
-    char  extraArgs[256]  = "";
-};
-
-struct Option { const char* label; const char* flag; };
-
-static const Option kVideoSinks[] = {
-    { "D3D11 (recommended)",  "-vs d3d11videosink"  },
-    { "D3D12 (Alt+Enter FS)", "-vs d3d12videosink"  },
-    { "Auto",                 ""                    },
-};
-static const Option kVideoDecoders[] = {
-    { "Hardware D3D11",    "-vd d3d11videodec" },
-    { "NVIDIA NVDEC",      "-vd nvh264dec"     },
-    { "Software (FFmpeg)", "-vd avdec_h264"    },
-    { "Auto (decodebin)",  ""                  },
-};
-static const Option kAudioSinks[] = {
-    { "DirectSound",       "-as directsoundsink" },
-    { "WASAPI",            "-as wasapisink"       },
-    { "WASAPI Exclusive",  "-as wasapi2sink"      },
-    { "Auto",              ""                     },
-    { "Disabled",          "-a"                   },
-};
-
-static std::string BuildArgs(const Settings& s)
-{
-    std::string args;
-    auto append = [&](const std::string& tok) {
-        if (!tok.empty()) { if (!args.empty()) args += ' '; args += tok; }
-    };
-
-    if (s.serverName[0]) { append("-n"); append(std::string("\"") + s.serverName + "\""); }
-    if (s.port != 7100)  { append("-p"); append(std::to_string(s.port)); }
-    if (s.fullscreen)    append("-fs");
-    if (s.windowSize[0] && std::string(s.windowSize) != "1920x1080") {
-        append("-s"); append(s.windowSize);
-    }
-    if (s.pin)           append("-pin");
-    if (s.password[0])   { append("-pw"); append(std::string("\"") + s.password + "\""); }
-
-    append(kVideoSinks[s.videoSinkIdx].flag);
-    append(kVideoDecoders[s.videoDecoderIdx].flag);
-    if (s.h265) append("-h265");
-    if (s.fps > 0) { append("-fps"); append(std::to_string(s.fps)); }
-    append(kAudioSinks[s.audioSinkIdx].flag);
-    if (s.volume < 0.995f) {
-        char vbuf[16]; snprintf(vbuf, sizeof(vbuf), "%.2f", s.volume);
-        append("-vol"); append(vbuf);
-    }
-    if (s.noFreeze) append("-nofreeze");
-    if (s.debug)    append("-d");
-    if (s.extraArgs[0]) append(s.extraArgs);
-
-    return args;
-}
+#include <dwmapi.h>
 
 // ── INI persistence ───────────────────────────────────────────────────────────
 
-static void SaveSettings(const Settings& s, const std::string& path)
+static bool SaveSettings(const Settings& s, const std::string& path)
 {
-    std::ofstream f(path);
-    if (!f) return;
-    f << "serverName="      << s.serverName    << "\n";
-    f << "port="            << s.port          << "\n";
-    f << "fullscreen="      << (s.fullscreen ? 1 : 0) << "\n";
-    f << "windowSize="      << s.windowSize    << "\n";
-    f << "pin="             << (s.pin ? 1 : 0) << "\n";
-    f << "password="        << s.password      << "\n";
-    f << "videoSinkIdx="    << s.videoSinkIdx  << "\n";
-    f << "videoDecoderIdx=" << s.videoDecoderIdx << "\n";
-    f << "h265="            << (s.h265 ? 1 : 0) << "\n";
-    f << "audioSinkIdx="    << s.audioSinkIdx  << "\n";
-    f << "volume="          << s.volume        << "\n";
-    f << "fps="             << s.fps           << "\n";
-    f << "noFreeze="        << (s.noFreeze ? 1 : 0) << "\n";
-    f << "debug="           << (s.debug ? 1 : 0) << "\n";
-    f << "extraArgs="       << s.extraArgs     << "\n";
+    std::ofstream f(path, std::ios::binary);
+    if (!f) return false;
+    f << SerializeSettings(s);
+    return (bool)f;
 }
 
 static void LoadSettings(Settings& s, const std::string& path)
 {
-    std::ifstream f(path);
+    std::ifstream f(path, std::ios::binary);
     if (!f) return;
-    std::string line;
-    while (std::getline(f, line)) {
-        auto eq = line.find('=');
-        if (eq == std::string::npos) continue;
-        std::string key = line.substr(0, eq);
-        std::string val = line.substr(eq + 1);
-        if      (key == "serverName")     strncpy(s.serverName,  val.c_str(), sizeof(s.serverName) - 1);
-        else if (key == "port")           s.port = std::stoi(val);
-        else if (key == "fullscreen")     s.fullscreen = (val == "1");
-        else if (key == "windowSize")     strncpy(s.windowSize, val.c_str(), sizeof(s.windowSize) - 1);
-        else if (key == "pin")            s.pin = (val == "1");
-        else if (key == "password")       strncpy(s.password,   val.c_str(), sizeof(s.password) - 1);
-        else if (key == "videoSinkIdx")   s.videoSinkIdx    = std::stoi(val);
-        else if (key == "videoDecoderIdx") s.videoDecoderIdx = std::stoi(val);
-        else if (key == "h265")           s.h265 = (val == "1");
-        else if (key == "audioSinkIdx")   s.audioSinkIdx    = std::stoi(val);
-        else if (key == "volume")         s.volume = std::stof(val);
-        else if (key == "fps")            s.fps = std::stoi(val);
-        else if (key == "noFreeze")       s.noFreeze = (val == "1");
-        else if (key == "debug")          s.debug = (val == "1");
-        else if (key == "extraArgs")      strncpy(s.extraArgs,  val.c_str(), sizeof(s.extraArgs) - 1);
-    }
-    auto clamp = [](int& v, int lo, int hi) { if (v < lo) v = lo; if (v > hi) v = hi; };
-    clamp(s.videoSinkIdx,    0, (int)(sizeof(kVideoSinks)    / sizeof(*kVideoSinks))    - 1);
-    clamp(s.videoDecoderIdx, 0, (int)(sizeof(kVideoDecoders) / sizeof(*kVideoDecoders)) - 1);
-    clamp(s.audioSinkIdx,    0, (int)(sizeof(kAudioSinks)    / sizeof(*kAudioSinks))    - 1);
-    if (s.volume < 0.0f) s.volume = 0.0f;
-    if (s.volume > 1.0f) s.volume = 1.0f;
-    if (s.fps < 0 || s.fps > 256) s.fps = 0;
+    std::stringstream ss; ss << f.rdbuf();
+    ParseSettings(s, ss.str());
 }
 
 // ── Process management ────────────────────────────────────────────────────────
@@ -174,9 +64,24 @@ static bool IsUxPlayRunning()
     return true;
 }
 
-static void LaunchUxPlay(const Settings& s)
+static std::string LastErrorText(DWORD err)
 {
-    if (IsUxPlayRunning()) return;
+    wchar_t* msg = NULL;
+    FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                   NULL, err, 0, (LPWSTR)&msg, 0, NULL);
+    std::string out;
+    if (msg) {
+        int n = WideCharToMultiByte(CP_UTF8, 0, msg, -1, NULL, 0, NULL, NULL);
+        if (n > 1) { out.resize(n - 1); WideCharToMultiByte(CP_UTF8, 0, msg, -1, &out[0], n, NULL, NULL); }
+        LocalFree(msg);
+        while (!out.empty() && (out.back() == '\n' || out.back() == '\r' || out.back() == ' ')) out.pop_back();
+    }
+    return out;
+}
+
+static bool LaunchUxPlay(const Settings& s, std::string* error)
+{
+    if (IsUxPlayRunning()) return true;
 
     std::string args = BuildArgs(s);
     std::wstring wArgs(args.begin(), args.end());
@@ -184,6 +89,10 @@ static void LaunchUxPlay(const Settings& s)
     wchar_t exePath[MAX_PATH];
     wcscpy_s(exePath, g_exeDir);
     wcscat_s(exePath, L"uxplay.exe");
+    if (GetFileAttributesW(exePath) == INVALID_FILE_ATTRIBUTES) {
+        if (error) *error = "uxplay.exe was not found next to the launcher. Reinstall UxPlay or run the launcher from its install folder.";
+        return false;
+    }
 
     std::wstring cmdLine = L"\"";
     cmdLine += exePath;
@@ -202,7 +111,10 @@ static void LaunchUxPlay(const Settings& s)
                        &si, &pi)) {
         g_hProcess = pi.hProcess;
         g_hThread  = pi.hThread;
+        return true;
     }
+    if (error) *error = "Could not start uxplay.exe: " + LastErrorText(GetLastError());
+    return false;
 }
 
 static void StopUxPlay()
@@ -419,6 +331,22 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             CreateRenderTarget();
         }
         return 0;
+    case WM_GETMINMAXINFO: {
+        UINT dpi = 96;
+        HMODULE u32 = GetModuleHandleW(L"user32.dll");
+        typedef UINT (WINAPI *GetDpiForWindowFn)(HWND);
+        if (auto fn = u32 ? (GetDpiForWindowFn)GetProcAddress(u32, "GetDpiForWindow") : NULL) dpi = fn(hWnd);
+        auto* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
+        mmi->ptMinTrackSize.x = MulDiv(560, dpi, 96);
+        mmi->ptMinTrackSize.y = MulDiv(480, dpi, 96);
+        return 0;
+    }
+    case WM_DPICHANGED: {
+        const RECT* r = reinterpret_cast<const RECT*>(lParam);
+        SetWindowPos(hWnd, NULL, r->left, r->top, r->right - r->left, r->bottom - r->top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        return 0;
+    }
     case WM_SYSCOMMAND:
         if ((wParam & 0xfff0) == SC_MINIMIZE) { MinimizeToTray(hWnd); return 0; }
         if ((wParam & 0xfff0) == SC_KEYMENU)  return 0;
@@ -456,22 +384,12 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
-// ── Combo helper ──────────────────────────────────────────────────────────────
+// ── UI host bindings ──────────────────────────────────────────────────────────
 
-static bool ComboOptions(const char* label, int* current, const Option* opts, int count)
-{
-    const char* preview = ((*current >= 0 && *current < count) ? opts[*current].label : "");
-    bool changed = false;
-    if (ImGui::BeginCombo(label, preview)) {
-        for (int i = 0; i < count; ++i) {
-            bool sel = (*current == i);
-            if (ImGui::Selectable(opts[i].label, sel)) { *current = i; changed = true; }
-            if (sel) ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
-    }
-    return changed;
-}
+static std::string g_iniPath;
+static bool HostSave(const Settings& s)            { return SaveSettings(s, g_iniPath); }
+static int  HostGetRotation()                      { return g_overlayRot; }
+static void HostSetRotation(int rot)               { SetOverlayRotation(rot); }
 
 // ── WinMain ───────────────────────────────────────────────────────────────────
 
@@ -493,10 +411,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     SetEnvironmentVariableW(L"PATH", (dir + L";" + existingPath).c_str());
 
     std::string iniDir(g_exeDir, g_exeDir + wcslen(g_exeDir));
-    std::string iniPath = iniDir + "uxplay-settings.ini";
+    g_iniPath = iniDir + "uxplay-settings.ini";
 
     Settings settings;
-    LoadSettings(settings, iniPath);
+    LoadSettings(settings, g_iniPath);
+    UiState ui;
+    ui.savedSnapshot = SerializeSettings(settings);
 
     // Register window classes
     WNDCLASSEXW wc = {};
@@ -505,6 +425,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    wc.hbrBackground = CreateSolidBrush(RGB(0x0C, 0x0D, 0x10));  // no white flash before first frame
     wc.lpszClassName = L"UxPlayGUI";
     RegisterClassExW(&wc);
 
@@ -515,16 +437,26 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     wcOv.lpszClassName = L"UxPlayRotOverlay";
     RegisterClassExW(&wcOv);
 
-    // Size the window to fit all UI elements without scrolling.
-    // Compute required client area then adjust for non-client chrome.
-    const int kClientW = 500, kClientH = 660;
+    // Per-monitor DPI awareness so text renders crisply; the UI scales itself.
+    ImGui_ImplWin32_EnableDpiAwareness();
+    POINT origin = {0, 0};
+    float dpiScale = ImGui_ImplWin32_GetDpiScaleForMonitor(MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY));
+    if (dpiScale < 1.0f) dpiScale = 1.0f;
+
+    const DWORD style = WS_OVERLAPPEDWINDOW;
+    const int kClientW = (int)(900 * dpiScale), kClientH = (int)(640 * dpiScale);
     RECT rc = {0, 0, kClientW, kClientH};
-    AdjustWindowRect(&rc, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
-    HWND hwnd = CreateWindowW(L"UxPlayGUI", L"UxPlay Launcher",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+    AdjustWindowRect(&rc, style, FALSE);
+    HWND hwnd = CreateWindowW(L"UxPlayGUI", L"UxPlay", style,
         CW_USEDEFAULT, CW_USEDEFAULT,
         rc.right - rc.left, rc.bottom - rc.top,
         NULL, NULL, hInst, NULL);
+
+    // Dark title bar + caption color matching the sidebar (Windows 10 20H1+ / 11; ignored elsewhere).
+    BOOL dark = TRUE;
+    DwmSetWindowAttribute(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &dark, sizeof(dark));
+    COLORREF caption = RGB(0x11, 0x12, 0x17);
+    DwmSetWindowAttribute(hwnd, 35 /* DWMWA_CAPTION_COLOR */, &caption, sizeof(caption));
 
     if (!CreateDeviceD3D(hwnd)) {
         CleanupDeviceD3D();
@@ -541,11 +473,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     io.IniFilename = NULL;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    ImGui::StyleColorsDark();
+    ApplyUiTheme(dpiScale);
+    UiFonts fonts = LoadUiFonts(dpiScale,
+                                "C:\\Windows\\Fonts\\segoeui.ttf",
+                                "C:\\Windows\\Fonts\\seguisb.ttf",
+                                "C:\\Windows\\Fonts\\consola.ttf");
+    const UiHost host = { IsUxPlayRunning, LaunchUxPlay, StopUxPlay, HostSave, HostGetRotation, HostSetRotation };
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
-    ImVec4 clearColor = ImVec4(0.12f, 0.12f, 0.12f, 1.0f);
+    ImVec4 clearColor = UiClearColor();
     bool done = false;
 
     while (!done) {
@@ -561,118 +498,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        // Fixed window filling the entire client area — no scroll bar
-        ImGui::SetNextWindowPos(ImVec2(0, 0));
-        ImGui::SetNextWindowSize(io.DisplaySize);
-        ImGui::Begin("##main", NULL,
-            ImGuiWindowFlags_NoTitleBar    | ImGuiWindowFlags_NoResize  |
-            ImGuiWindowFlags_NoMove        | ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar |
-            ImGuiWindowFlags_NoScrollWithMouse);
-
-        // ── Basic ──────────────────────────────────────────────────────────
-        ImGui::SeparatorText("Basic");
-
-        ImGui::SetNextItemWidth(250);
-        ImGui::InputText("Server name", settings.serverName, sizeof(settings.serverName));
-        ImGui::SameLine(); ImGui::TextDisabled("(empty = hostname)");
-
-        ImGui::SetNextItemWidth(100);
-        ImGui::InputInt("Port", &settings.port, 0);
-        if (settings.port < 1) settings.port = 1;
-        if (settings.port > 65535) settings.port = 65535;
-
-        ImGui::Checkbox("Fullscreen on start (-fs)", &settings.fullscreen);
-
-        ImGui::SetNextItemWidth(120);
-        ImGui::InputText("Window size (WxH)", settings.windowSize, sizeof(settings.windowSize));
-
-        ImGui::Checkbox("Require PIN (-pin)", &settings.pin);
-
-        ImGui::SetNextItemWidth(200);
-        ImGui::InputText("Password (-pw)", settings.password, sizeof(settings.password),
-                         ImGuiInputTextFlags_Password);
-
-        // ── Video ──────────────────────────────────────────────────────────
-        ImGui::SeparatorText("Video");
-
-        ImGui::SetNextItemWidth(220);
-        ComboOptions("Video sink", &settings.videoSinkIdx,
-                     kVideoSinks, (int)(sizeof(kVideoSinks) / sizeof(*kVideoSinks)));
-
-        ImGui::SetNextItemWidth(220);
-        ComboOptions("Video decoder", &settings.videoDecoderIdx,
-                     kVideoDecoders, (int)(sizeof(kVideoDecoders) / sizeof(*kVideoDecoders)));
-
-        ImGui::Checkbox("H.265 / 4K support (-h265)", &settings.h265);
-
-        ImGui::SetNextItemWidth(220);
-        ImGui::SliderInt("FPS (-fps)", &settings.fps, 0, 256,
-                         settings.fps == 0 ? "Default" : "%d fps");
-
-        // Rotate only the uxplay player window via a GDI overlay
-        {
-            static const char* kRotLabels[] = {"0\xc2\xb0", "90\xc2\xb0 CW", "180\xc2\xb0", "270\xc2\xb0 CW"};
-            bool uxRunning = IsUxPlayRunning();
-            ImGui::BeginDisabled(!uxRunning);
-            if (ImGui::Button("Rotate window 90\xc2\xb0 CW"))
-                SetOverlayRotation((g_overlayRot + 1) % 4);
-            ImGui::SameLine();
-            if (g_overlayRot != 0 && ImGui::Button("Reset rotation"))
-                SetOverlayRotation(0);
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            ImGui::TextDisabled("Current: %s%s", kRotLabels[g_overlayRot],
-                                uxRunning ? "" : "  (launch first)");
-        }
-
-        // ── Audio ──────────────────────────────────────────────────────────
-        ImGui::SeparatorText("Audio");
-
-        ImGui::SetNextItemWidth(220);
-        ComboOptions("Audio sink", &settings.audioSinkIdx,
-                     kAudioSinks, (int)(sizeof(kAudioSinks) / sizeof(*kAudioSinks)));
-
-        ImGui::SetNextItemWidth(220);
-        ImGui::SliderFloat("Volume (-vol)", &settings.volume, 0.0f, 1.0f, "%.2f");
-
-        // ── Advanced ────────────────────────────────────────────────────────
-        ImGui::SeparatorText("Advanced");
-
-        ImGui::Checkbox("No freeze on disconnect (-nofreeze)", &settings.noFreeze);
-        ImGui::Checkbox("Debug logging (-d)", &settings.debug);
-
-        ImGui::SetNextItemWidth(-1.0f);
-        ImGui::InputText("Extra arguments", settings.extraArgs, sizeof(settings.extraArgs));
-
-        // ── Command preview ─────────────────────────────────────────────────
-        ImGui::SeparatorText("Command");
-        std::string preview = "uxplay.exe";
-        std::string args = BuildArgs(settings);
-        if (!args.empty()) { preview += " "; preview += args; }
-        ImGui::TextWrapped("%s", preview.c_str());
-
-        // ── Buttons ─────────────────────────────────────────────────────────
-        ImGui::Separator();
-        float btnW = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-
-        bool running = IsUxPlayRunning();
-        if (!running) {
-            if (ImGui::Button("Launch UxPlay", ImVec2(btnW, 36)))
-                LaunchUxPlay(settings);
-        } else {
-            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.1f, 0.1f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.9f, 0.2f, 0.2f, 1.0f));
-            if (ImGui::Button("Stop UxPlay", ImVec2(btnW, 36)))
-                StopUxPlay();
-            ImGui::PopStyleColor(3);
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Save Settings", ImVec2(btnW, 36)))
-            SaveSettings(settings, iniPath);
-
-        ImGui::End();
+        DrawLauncherUI(settings, ui, host, fonts);
 
         // Render
         ImGui::Render();
