@@ -735,7 +735,7 @@ static const int kPageCount = (int)(sizeof(kPages) / sizeof(*kPages));
 
 static void PageConnection(Settings& s)
 {
-    SectionHeader("Identity");
+    SectionHeader("Network", "How Apple devices find and reach this receiver.");
     BeginCard();
     BeginRow("Server name", "Name shown in the AirPlay menu on iPhone, iPad and Mac.", "-n");
     ImGui::InputTextWithHint("##v", "Use this PC's hostname", s.serverName, sizeof(s.serverName));
@@ -747,7 +747,7 @@ static void PageConnection(Settings& s)
     EndRow();
     EndCard();
 
-    SectionHeader("Access");
+    SectionHeader("Security", "Control who is allowed to mirror to this PC.");
     BeginCard();
     ToggleRow("Require PIN", "Show a one-time PIN on screen the first time a device connects.", "-pin", &s.pin);
     BeginRow("Password", "Devices must enter this password to mirror. Leave empty for none.", "-pw");
@@ -788,7 +788,7 @@ static void PageDisplay(Settings& s, const UiHost& host)
     }
     EndCard();
 
-    SectionHeader("Video pipeline");
+    SectionHeader("Video playback");
     BeginCard();
     BeginRow("Video sink", "Renderer used to present frames.", "-vs");
     ComboOptions("##v", &s.videoSinkIdx, kVideoSinks, kVideoSinkCount);
@@ -805,7 +805,7 @@ static void PageDisplay(Settings& s, const UiHost& host)
 
 static void PageAudio(Settings& s)
 {
-    SectionHeader("Output");
+    SectionHeader("Audio output");
     BeginCard();
     BeginRow("Audio sink", "Output API. Choose Disabled to mirror video only.", "-as");
     ComboOptions("##v", &s.audioSinkIdx, kAudioSinks, kAudioSinkCount);
@@ -822,7 +822,7 @@ static void PageAudio(Settings& s)
 
 static void PageAdvanced(Settings& s, UiState& ui, UiPrefs& prefs, const std::string& cmd)
 {
-    SectionHeader("Behavior");
+    SectionHeader("Session behavior");
     BeginCard();
     ToggleRow("Close window on disconnect", "Close the video window when a device disconnects instead of freezing on the last frame.",
               "-nofreeze", &s.noFreeze);
