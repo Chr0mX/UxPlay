@@ -37,6 +37,8 @@ static void TestFullConnectionLifecycle()
     CHECK(s.deviceName == "Alex's iPhone");
     CHECK(s.deviceModel == "iPhone15,2");
     CHECK(s.deviceAddress == "192.168.1.20");
+    s.OnLine(4, "@uxplay-status video-size w=886 h=1920");
+    CHECK(s.videoW == 886 && s.videoH == 1920 && s.videoSizeSerial == 1);
     s.OnLine(4, "@uxplay-status stream-start kind=video");
     CHECK(s.phase == Phase::Connected);
     CHECK(s.streamingSince == 4);

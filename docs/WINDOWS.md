@@ -235,11 +235,15 @@ The **UxPlay** shortcut opens `uxplay-gui.exe`, which configures and runs `uxpla
 - **Errors** (Bonjour missing, port in use, missing GStreamer plugin, invalid option, unexpected exit)
   are explained with a next step, a **Try again** button and the technical details.
 - **Shortcuts:** `F5` start, `Shift+F5` stop, `Ctrl+Shift+F5` restart, `Ctrl+S` save, `Ctrl+1`–`Ctrl+4` pages,
-  `Ctrl+R` rotate player, `Ctrl+L` open log, `F1` documentation, `Ctrl+Q` exit.
-- **Multiple phones:** *Connection → Phones at once* (1–4) starts one receiver per phone, each with its own
-  AirPlay name ("UxPlay@PC", "UxPlay@PC 2", ...), ports (base port + 10 each) and window. Player rotation applies to receiver 1.
-- **Closing or minimizing** the window while the receiver runs keeps it running in the notification area;
-  use **File → Exit** or the tray menu to quit. Only one launcher runs at a time.
+  `Ctrl+L` open log, `F1` documentation, `Ctrl+Q` exit.
+- **Multiple phones:** *Connection → Phones at once* (1–4) is a maximum. While every running receiver is in use,
+  the next one ("UxPlay@PC 2", ...) starts automatically on base port + 10 each; extra idle receivers close again.
+- **Player window:** sized to the video's aspect ratio (refits when the phone rotates; keeps the shape when you resize).
+  Right-click it to rotate, reset rotation or fit it to the video.
+- **Storage:** *Advanced → Storage* (and the installer) choose the settings and logs folders.
+- **Closing** the window quits and stops every receiver (each runs in a kill-on-close job, so nothing is left
+  behind even if the launcher crashes). **Minimizing** while running keeps it in the notification area.
+  Only one launcher runs at a time.
 
 | What | Where |
 |---|---|

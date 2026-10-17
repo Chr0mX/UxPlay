@@ -172,6 +172,7 @@ void Session::OnLaunched(double now, unsigned newPid, const std::string& cmd) {
     launchedAt = now;
     streamingSince = 0.0;
     deviceName.clear(); deviceModel.clear(); deviceId.clear(); deviceAddress.clear(); streamKinds.clear();
+    videoW = videoH = 0;
     recentProblems_.clear();
     pendingKind_.clear();
     stopRequested_ = false;
@@ -228,6 +229,10 @@ void Session::HandleStatus(double now, const std::string& body) {
         streamingSince = 0.0;
         hasError = false;
         SetPhase(Phase::Connecting, now);
+    } else if (ev == "video-size") {
+        unsigned w = (unsigned) std::strtoul(Field(body, "w").c_str(), nullptr, 10);
+        unsigned h = (unsigned) std::strtoul(Field(body, "h").c_str(), nullptr, 10);
+        if (w && h) { videoW = w; videoH = h; ++videoSizeSerial; }
     } else if (ev == "stream-start") {
         std::string kind = Field(body, "kind");
         if (streamKinds.find(kind) == std::string::npos)

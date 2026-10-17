@@ -65,6 +65,8 @@ public:
     unsigned    port         = 0;
     std::string deviceName, deviceModel, deviceId, deviceAddress;
     std::string streamKinds;          // "audio", "video", "audio + video"
+    unsigned    videoW = 0, videoH = 0;   // current stream frame size (0 = unknown)
+    int         videoSizeSerial = 0;      // increments on each size report (rotation, new stream)
     std::string uxplayVersion;        // from the startup banner, if seen
     bool        hasError     = false;
     ErrorInfo   error;

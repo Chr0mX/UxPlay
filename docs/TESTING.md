@@ -18,7 +18,7 @@ Use this checklist to validate a portable Windows release on a clean system.
 - [ ] Verify the following files are present in the extracted folder:
   - [ ] `uxplay.exe`
   - [ ] `uxplay.bat`
-  - [ ] `README-Windows.txt`
+  - [ ] `README.md`
   - [ ] `dnssd.dll` (or note that Bonjour must be installed separately)
   - [ ] `gst-plugins/` directory with at least 10 `.dll` files
   - [ ] `libgstreamer-1.0-0.dll` (or similar) in root

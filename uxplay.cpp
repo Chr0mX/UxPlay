@@ -2527,6 +2527,8 @@ extern "C" void video_report_size(void *cls, float *width_source, float *height_
     if (use_video) {
         video_renderer_size(width_source, height_source, width, height);
     }
+    /* stream frame size (changes when the device rotates): lets the GUI fit the player window */
+    gui_status_event("video-size w=%u h=%u", (unsigned int) *width, (unsigned int) *height);
 }
 
 extern "C" void audio_set_coverart(void *cls, const void *buffer, int buflen) {

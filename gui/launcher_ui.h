@@ -78,6 +78,11 @@ struct UiHost {
     void (*exitApp)();
     void (*themeApplied)(bool dark);       // e.g. update the native title bar
     const char* (*logStatus)();            // nullptr when logging works, else reason
+    // Storage folders: which = 0 settings, 1 logs.
+    const char* (*folderPath)(int which);  // current folder (UTF-8)
+    bool (*folderIsDefault)(int which);
+    int  (*chooseFolder)(int which, std::string* message);   // 1 changed, 0 cancelled, -1 failed
+    void (*resetFolder)(int which);
 };
 
 struct UiState {

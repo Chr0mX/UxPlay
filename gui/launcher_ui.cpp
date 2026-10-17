@@ -777,14 +777,15 @@ static void PageConnection(Settings& s, const UiState& ui, Session* sessions, in
     EndRow();
     EndCard();
 
-    SectionHeader("Multiple phones", "Mirror several phones at once, each in its own window.");
+    SectionHeader("Multiple phones", "When a phone is already mirroring, another receiver opens for the next one.");
     BeginCard();
     {
         static const Option kCounts[] = { { "1 phone", "" }, { "2 phones", "" }, { "3 phones", "" }, { "4 phones", "" } };
         int idx = s.receivers - 1;
         BeginRow("Phones at once", running ? "Stop the receiver to change this."
-                 : "Runs one receiver per phone, listed separately in the AirPlay menu. "
-                   "Each uses its own ports (base port + 10 per extra phone).", nullptr, 160);
+                 : "Maximum phones mirroring at the same time, each in its own window. Extra receivers "
+                   "(\"<name> 2\", ...) appear automatically while the others are in use, on ports base + 10 each.",
+                 nullptr, 160);
         ImGui::BeginDisabled(running);
         if (ComboOptions("##v", &idx, kCounts, 4)) s.receivers = idx + 1;
         ImGui::EndDisabled();
@@ -827,28 +828,10 @@ static void PageDisplay(Settings& s, const UiHost& host)
     BeginRow("Window size", "Initial player size as WIDTHxHEIGHT.", "-s", 160);
     ImGui::InputTextWithHint("##v", "1920x1080", s.windowSize, sizeof(s.windowSize));
     EndRow();
-    {
-        static const char* kRot[] = { "0\xc2\xb0", "90\xc2\xb0", "180\xc2\xb0", "270\xc2\xb0" };
-        bool running = host.isRunning();
-        int rot = host.getRotation();
-        char desc[96];
-        snprintf(desc, sizeof(desc), running ? "Rotates the live player view, currently %s clockwise."
-                                             : "Available while the receiver is running.", kRot[rot]);
-        BeginRow("Rotation", desc, nullptr, rot ? 216 : 120);
-        ImGui::BeginDisabled(!running);
-        float bh = ImGui::GetFrameHeight();
-        if (ActionButton("Rotate 90\xc2\xb0", Icon::Rotate, true, ImVec2(Px(120), bh), BtnKind::Secondary,
-                         "Rotate the player window clockwise without reconnecting (Ctrl+R)"))
-            host.setRotation((rot + 1) % 4);
-        if (rot != 0) {
-            ImGui::SameLine(0, Px(tok::S2));
-            if (ActionButton("Reset", Icon::Rotate, false, ImVec2(Px(88), bh), BtnKind::Ghost,
-                             "Reset rotation (Ctrl+Shift+R)"))
-                host.setRotation(0);
-        }
-        ImGui::EndDisabled();
-        EndRow();
-    }
+    BeginRow("Rotate and resize", "Right-click the player window to rotate it or fit it to the video. "
+             "The window keeps the video's shape when you resize it.", nullptr, 24);
+    ImGui::Dummy(ImVec2(Px(24), ImGui::GetFrameHeight()));
+    EndRow();
     EndCard();
 
     SectionHeader("Video playback");
@@ -883,7 +866,33 @@ static void PageAudio(Settings& s)
     EndCard();
 }
 
-static void PageAdvanced(Settings& s, UiState& ui, UiPrefs& prefs, const std::string& cmd)
+static void FolderRow(const char* label, int which, UiState& ui, const UiHost& host)
+{
+    const char* path = host.folderPath ? host.folderPath(which) : "";
+    bool def = host.folderIsDefault ? host.folderIsDefault(which) : true;
+    std::string desc = std::string(path) + (def ? "  (default)" : "");
+    BeginRow(label, desc.c_str(), nullptr, def ? 168 : 204);
+    float bh = ImGui::GetFrameHeight();
+    if (ActionButton("Change...", Icon::File, false, ImVec2(Px(96), bh), BtnKind::Secondary, "Choose a different folder")) {
+        std::string msg;
+        int r = host.chooseFolder ? host.chooseFolder(which, &msg) : 0;
+        if (r != 0) ShowToast(ui, msg.c_str(), r < 0);
+    }
+    ImGui::SameLine(0, Px(tok::S2));
+    if (ActionButton("Open", Icon::File, false, ImVec2(Px(64), bh), BtnKind::Ghost, "Open this folder in Explorer")) {
+        if (which == 0) host.openSettingsFolder(); else host.openLogFolder();
+    }
+    if (!def) {
+        ImGui::SameLine(0, Px(4));
+        if (IconButton("##reset", Icon::Restart, "Go back to the default folder", 28.0f)) {
+            host.resetFolder(which);
+            ShowToast(ui, which == 0 ? "Settings folder reset to default" : "Logs folder reset to default");
+        }
+    }
+    EndRow();
+}
+
+static void PageAdvanced(Settings& s, UiState& ui, UiPrefs& prefs, const UiHost& host, const std::string& cmd)
 {
     SectionHeader("Session behavior");
     BeginCard();
@@ -900,6 +909,12 @@ static void PageAdvanced(Settings& s, UiState& ui, UiPrefs& prefs, const std::st
                   "captured and logged, whether or not the console is visible.", nullptr, &v);
         if (v != prefs.showConsoleOnStartup) { prefs.showConsoleOnStartup = v; ui.prefsDirty = true; }
     }
+    EndCard();
+
+    SectionHeader("Storage", "Where UxPlay keeps its settings and diagnostic logs.");
+    BeginCard();
+    FolderRow("Settings folder", 0, ui, host);
+    FolderRow("Logs folder", 1, ui, host);
     EndCard();
 
     SectionHeader("Custom arguments", "Appended verbatim after the generated options.");
@@ -1458,8 +1473,6 @@ static void Shortcuts(Settings& s, UiState& ui, UiPrefs& prefs, const UiHost& ho
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_F5, g) && running) Restart(s, host);
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_GraveAccent, g))         ui.consoleVisible = !ui.consoleVisible;
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_L, g))                   host.openLogFile();
-    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_R, g) && running)        host.setRotation((host.getRotation() + 1) % 4);
-    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_R, g) && running) host.setRotation(0);
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Q, g))                   host.exitApp();
     if (ImGui::Shortcut(ImGuiKey_F1, g))                                  host.openDocs();
     for (int i = 0; i < kPageCount; ++i)
@@ -1500,9 +1513,6 @@ static void MenuBar(Settings& s, UiState& ui, Session& ses, UiPrefs& prefs, cons
         if (ImGui::MenuItem("Start", "F5", false, !running)) host.start(s);
         if (ImGui::MenuItem("Stop", "Shift+F5", false, running)) host.stop();
         if (ImGui::MenuItem("Restart", "Ctrl+Shift+F5", false, running)) Restart(s, host);
-        ImGui::Separator();
-        if (ImGui::MenuItem("Rotate Player 90\xc2\xb0", "Ctrl+R", false, running)) host.setRotation((host.getRotation() + 1) % 4);
-        if (ImGui::MenuItem("Reset Player Rotation", "Ctrl+Shift+R", false, running && host.getRotation() != 0)) host.setRotation(0);
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Tools")) {
@@ -1702,7 +1712,7 @@ void DrawLauncherUI(Settings& s, UiState& ui, Session* sessions, int count, UiPr
         case 0: PageConnection(s, ui, sessions, count, running); break;
         case 1: PageDisplay(s, host);               break;
         case 2: PageAudio(s);                       break;
-        case 3: PageAdvanced(s, ui, prefs, cmd);    break;
+        case 3: PageAdvanced(s, ui, prefs, host, cmd); break;
         }
         ImGui::PopStyleVar();
         ImGui::PopItemWidth();
