@@ -1,6 +1,29 @@
-// UxPlay GUI Launcher — Dear ImGui + Win32 + D3D11
-// Provides a settings window to configure and launch uxplay.exe
+// UxPlay GUI Launcher — Win32 + D3D11 host for the Dear ImGui interface.
+//
+// Responsibilities (everything platform-specific lives here; the UI itself is
+// in launcher_ui.cpp and the session model in session.cpp):
+//   * starting/stopping uxplay.exe without a console window, capturing its
+//     stdout/stderr through a pipe drained by a background thread
+//   * a rotating diagnostic log in %LOCALAPPDATA%\UxPlay\logs
+//   * settings and UI preferences in %APPDATA%\UxPlay (atomic writes)
+//   * window placement, DPI, theme, tray icon, single instance, app icon
+//
+// Process-management notes:
+//   * uxplay.exe used to be started with CREATE_NEW_CONSOLE, which is the
+//     console window that appeared on every launch. It is now started with
+//     CREATE_NO_WINDOW; its output is shown in the in-app console panel and the
+//     log file instead. Hiding the console panel only hides a view: the process,
+//     the pipe reader and logging are unaffected.
+//   * The pipe is read continuously on a dedicated thread so uxplay.exe can
+//     never block on a full pipe buffer. Lines are queued under a mutex and
+//     consumed on the UI thread once per frame; all UI state is touched only on
+//     the UI thread.
+//   * Stopping still uses TerminateProcess, exactly as before (uxplay.exe has no
+//     console to receive Ctrl+C, and its Windows build has no other stop channel).
 
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0A00   // Windows 10 (the installer's minimum): GetDpiForWindow etc.
+#endif
 #ifndef UNICODE
 #define UNICODE
 #endif
@@ -10,218 +33,459 @@
 
 #include <windows.h>
 #include <shellapi.h>
+#include <shlobj.h>
+#include <shobjidl.h>
 #include <d3d11.h>
 #include <dxgi.h>
-#include <tchar.h>
+#include <dwmapi.h>
 #include <cstdio>
+#include <ctime>
 #include <string>
 #include <vector>
+#include <deque>
+#include <mutex>
 #include <fstream>
 #include <sstream>
-#include <algorithm>
 
 #include "imgui.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
+#include "launcher_ui.h"
+#include "resource.h"
 
-// ── Settings ──────────────────────────────────────────────────────────────────
+#ifndef UXPLAY_LAUNCHER_VERSION
+#define UXPLAY_LAUNCHER_VERSION "dev"
+#endif
 
-struct Settings {
-    char  serverName[128] = "";
-    int   port            = 7100;
-    bool  fullscreen      = false;
-    char  windowSize[32]  = "1920x1080";
-    bool  pin             = false;
-    char  password[128]   = "";
-    int   videoSinkIdx    = 0;
-    int   videoDecoderIdx = 3;  // default: Auto (decodebin), graceful hardware fallback
-    bool  h265            = true;
-    int   audioSinkIdx    = 0;
-    float volume          = 1.0f;
-    int   fps             = 60;
-    bool  noFreeze        = false;
-    bool  debug           = false;
-    char  extraArgs[256]  = "";
-};
+// ── Strings and paths ─────────────────────────────────────────────────────────
 
-struct Option { const char* label; const char* flag; };
-
-static const Option kVideoSinks[] = {
-    { "D3D11 (recommended)",  "-vs d3d11videosink"  },
-    { "D3D12 (Alt+Enter FS)", "-vs d3d12videosink"  },
-    { "Auto",                 ""                    },
-};
-static const Option kVideoDecoders[] = {
-    { "Hardware D3D11",    "-vd d3d11videodec" },
-    { "NVIDIA NVDEC",      "-vd nvh264dec"     },
-    { "Software (FFmpeg)", "-vd avdec_h264"    },
-    { "Auto (decodebin)",  ""                  },
-};
-static const Option kAudioSinks[] = {
-    { "DirectSound",       "-as directsoundsink" },
-    { "WASAPI",            "-as wasapisink"       },
-    { "WASAPI Exclusive",  "-as wasapi2sink"      },
-    { "Auto",              ""                     },
-    { "Disabled",          "-a"                   },
-};
-
-static std::string BuildArgs(const Settings& s)
+static std::string Utf8(const std::wstring& w)
 {
-    std::string args;
-    auto append = [&](const std::string& tok) {
-        if (!tok.empty()) { if (!args.empty()) args += ' '; args += tok; }
-    };
-
-    if (s.serverName[0]) { append("-n"); append(std::string("\"") + s.serverName + "\""); }
-    if (s.port != 7100)  { append("-p"); append(std::to_string(s.port)); }
-    if (s.fullscreen)    append("-fs");
-    if (s.windowSize[0] && std::string(s.windowSize) != "1920x1080") {
-        append("-s"); append(s.windowSize);
-    }
-    if (s.pin)           append("-pin");
-    if (s.password[0])   { append("-pw"); append(std::string("\"") + s.password + "\""); }
-
-    append(kVideoSinks[s.videoSinkIdx].flag);
-    append(kVideoDecoders[s.videoDecoderIdx].flag);
-    if (s.h265) append("-h265");
-    if (s.fps > 0) { append("-fps"); append(std::to_string(s.fps)); }
-    append(kAudioSinks[s.audioSinkIdx].flag);
-    if (s.volume < 0.995f) {
-        char vbuf[16]; snprintf(vbuf, sizeof(vbuf), "%.2f", s.volume);
-        append("-vol"); append(vbuf);
-    }
-    if (s.noFreeze) append("-nofreeze");
-    if (s.debug)    append("-d");
-    if (s.extraArgs[0]) append(s.extraArgs);
-
-    return args;
+    if (w.empty()) return {};
+    int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), NULL, 0, NULL, NULL);
+    std::string s(n, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &s[0], n, NULL, NULL);
+    return s;
 }
 
-// ── INI persistence ───────────────────────────────────────────────────────────
-
-static void SaveSettings(const Settings& s, const std::string& path)
+static std::wstring Wide(const std::string& s)
 {
-    std::ofstream f(path);
-    if (!f) return;
-    f << "serverName="      << s.serverName    << "\n";
-    f << "port="            << s.port          << "\n";
-    f << "fullscreen="      << (s.fullscreen ? 1 : 0) << "\n";
-    f << "windowSize="      << s.windowSize    << "\n";
-    f << "pin="             << (s.pin ? 1 : 0) << "\n";
-    f << "password="        << s.password      << "\n";
-    f << "videoSinkIdx="    << s.videoSinkIdx  << "\n";
-    f << "videoDecoderIdx=" << s.videoDecoderIdx << "\n";
-    f << "h265="            << (s.h265 ? 1 : 0) << "\n";
-    f << "audioSinkIdx="    << s.audioSinkIdx  << "\n";
-    f << "volume="          << s.volume        << "\n";
-    f << "fps="             << s.fps           << "\n";
-    f << "noFreeze="        << (s.noFreeze ? 1 : 0) << "\n";
-    f << "debug="           << (s.debug ? 1 : 0) << "\n";
-    f << "extraArgs="       << s.extraArgs     << "\n";
+    if (s.empty()) return {};
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), NULL, 0);
+    std::wstring w(n, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], n);
+    return w;
 }
 
-static void LoadSettings(Settings& s, const std::string& path)
+static std::string LastErrorText(DWORD err)
 {
-    std::ifstream f(path);
-    if (!f) return;
-    std::string line;
-    while (std::getline(f, line)) {
-        auto eq = line.find('=');
-        if (eq == std::string::npos) continue;
-        std::string key = line.substr(0, eq);
-        std::string val = line.substr(eq + 1);
-        if      (key == "serverName")     strncpy(s.serverName,  val.c_str(), sizeof(s.serverName) - 1);
-        else if (key == "port")           s.port = std::stoi(val);
-        else if (key == "fullscreen")     s.fullscreen = (val == "1");
-        else if (key == "windowSize")     strncpy(s.windowSize, val.c_str(), sizeof(s.windowSize) - 1);
-        else if (key == "pin")            s.pin = (val == "1");
-        else if (key == "password")       strncpy(s.password,   val.c_str(), sizeof(s.password) - 1);
-        else if (key == "videoSinkIdx")   s.videoSinkIdx    = std::stoi(val);
-        else if (key == "videoDecoderIdx") s.videoDecoderIdx = std::stoi(val);
-        else if (key == "h265")           s.h265 = (val == "1");
-        else if (key == "audioSinkIdx")   s.audioSinkIdx    = std::stoi(val);
-        else if (key == "volume")         s.volume = std::stof(val);
-        else if (key == "fps")            s.fps = std::stoi(val);
-        else if (key == "noFreeze")       s.noFreeze = (val == "1");
-        else if (key == "debug")          s.debug = (val == "1");
-        else if (key == "extraArgs")      strncpy(s.extraArgs,  val.c_str(), sizeof(s.extraArgs) - 1);
+    wchar_t* msg = NULL;
+    FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                   NULL, err, 0, (LPWSTR)&msg, 0, NULL);
+    std::string out;
+    if (msg) { out = Utf8(msg); LocalFree(msg); }
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r' || out.back() == ' ' || out.back() == '.'))
+        out.pop_back();
+    return out.empty() ? "Unknown error" : out;
+}
+
+static std::wstring g_exeDir;       // ends with '\'
+static std::wstring g_dataDir;      // %APPDATA%\UxPlay\  (settings, prefs)
+static std::wstring g_logDir;       // %LOCALAPPDATA%\UxPlay\logs (with trailing separator)
+
+static std::wstring KnownFolder(REFKNOWNFOLDERID id)
+{
+    PWSTR p = NULL;
+    std::wstring out;
+    if (SUCCEEDED(SHGetKnownFolderPath(id, KF_FLAG_CREATE, NULL, &p)) && p) out = p;
+    if (p) CoTaskMemFree(p);
+    return out;
+}
+
+// Returns a usable directory (created if needed), falling back to the exe folder.
+static std::wstring EnsureDir(const std::wstring& base, const wchar_t* sub)
+{
+    if (!base.empty()) {
+        std::wstring d = base + L"\\" + sub;
+        int r = SHCreateDirectoryExW(NULL, d.c_str(), NULL);
+        if (r == ERROR_SUCCESS || r == ERROR_ALREADY_EXISTS || r == ERROR_FILE_EXISTS) return d + L"\\";
     }
-    auto clamp = [](int& v, int lo, int hi) { if (v < lo) v = lo; if (v > hi) v = hi; };
-    clamp(s.videoSinkIdx,    0, (int)(sizeof(kVideoSinks)    / sizeof(*kVideoSinks))    - 1);
-    clamp(s.videoDecoderIdx, 0, (int)(sizeof(kVideoDecoders) / sizeof(*kVideoDecoders)) - 1);
-    clamp(s.audioSinkIdx,    0, (int)(sizeof(kAudioSinks)    / sizeof(*kAudioSinks))    - 1);
-    if (s.volume < 0.0f) s.volume = 0.0f;
-    if (s.volume > 1.0f) s.volume = 1.0f;
-    if (s.fps < 0 || s.fps > 256) s.fps = 0;
+    return g_exeDir;
 }
 
-// ── Process management ────────────────────────────────────────────────────────
-
-static HANDLE  g_hProcess = NULL;
-static HANDLE  g_hThread  = NULL;
-static wchar_t g_exeDir[MAX_PATH] = {};
-
-static bool IsUxPlayRunning()
+static bool ReadFileUtf8(const std::wstring& path, std::string* out)
 {
-    if (!g_hProcess) return false;
-    DWORD code = STILL_ACTIVE;
-    GetExitCodeProcess(g_hProcess, &code);
-    if (code != STILL_ACTIVE) {
-        CloseHandle(g_hProcess); g_hProcess = NULL;
-        CloseHandle(g_hThread);  g_hThread  = NULL;
+    std::ifstream f(path.c_str(), std::ios::binary);
+    if (!f) return false;
+    std::stringstream ss; ss << f.rdbuf();
+    *out = ss.str();
+    return true;
+}
+
+// Write to a temporary file, then atomically replace the target, so a crash or
+// full disk never leaves a truncated settings file behind.
+static bool WriteFileAtomic(const std::wstring& path, const std::string& data)
+{
+    std::wstring tmp = path + L".tmp";
+    HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    BOOL ok = WriteFile(h, data.data(), (DWORD)data.size(), &written, NULL) && written == data.size();
+    ok = ok && FlushFileBuffers(h);
+    CloseHandle(h);
+    if (!ok || !MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        DeleteFileW(tmp.c_str());
         return false;
     }
     return true;
 }
 
-static void LaunchUxPlay(const Settings& s)
+// ── Diagnostic log ────────────────────────────────────────────────────────────
+// Thread-safe (UI thread + pipe reader). Rotates at 2 MB, keeping one backup.
+// Never logs the receiver password: command lines are logged in redacted form.
+
+class Logger {
+public:
+    void Open(const std::wstring& dir)
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        path_ = dir + L"uxplay.log";
+        RotateLocked(true);
+    }
+    void Write(const char* level, const char* source, const std::string& text)
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        if (!f_) return;
+        SYSTEMTIME t; GetLocalTime(&t);
+        char head[64];
+        int n = snprintf(head, sizeof(head), "%04d-%02d-%02d %02d:%02d:%02d.%03d %-5s %-6s ",
+                         t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds, level, source);
+        if (fwrite(head, 1, n, f_) != (size_t)n || fwrite(text.data(), 1, text.size(), f_) != text.size() ||
+            fputc('\n', f_) == EOF) {
+            Fail("write failed (disk full?)");
+            return;
+        }
+        fflush(f_);
+        size_ += n + text.size() + 1;
+        if (size_ > kMaxBytes) RotateLocked(false);
+    }
+    const char* Problem() { std::lock_guard<std::mutex> lk(m_); return problem_.empty() ? nullptr : problem_.c_str(); }
+    std::wstring Path() const { return path_; }
+    void Close() { std::lock_guard<std::mutex> lk(m_); if (f_) { fclose(f_); f_ = nullptr; } }
+
+private:
+    static const size_t kMaxBytes = 2 * 1024 * 1024;
+    void Fail(const char* why) { if (f_) { fclose(f_); f_ = nullptr; } problem_ = why; }
+    void RotateLocked(bool startup)
+    {
+        if (f_) { fclose(f_); f_ = nullptr; }
+        WIN32_FILE_ATTRIBUTE_DATA fa;
+        bool exists = GetFileAttributesExW(path_.c_str(), GetFileExInfoStandard, &fa) != 0;
+        size_t cur = exists ? (size_t)fa.nFileSizeLow : 0;
+        if (!startup || cur > kMaxBytes)
+            MoveFileExW(path_.c_str(), (path_ + L".1").c_str(), MOVEFILE_REPLACE_EXISTING);
+        f_ = _wfopen(path_.c_str(), L"ab");
+        if (!f_) { problem_ = "cannot open the log file"; return; }
+        problem_.clear();
+        fseek(f_, 0, SEEK_END);
+        size_ = (size_t)ftell(f_);
+    }
+    std::mutex   m_;
+    FILE*        f_ = nullptr;
+    size_t       size_ = 0;
+    std::wstring path_;
+    std::string  problem_;
+};
+
+static Logger g_log;
+
+// ── Receiver processes ────────────────────────────────────────────────────────
+// One uxplay.exe per receiver slot ("Phones at once"); slot 0 is the original
+// single receiver. Each slot has its own pipe, reader thread and Session.
+
+struct Receiver {
+    HANDLE hProcess = NULL;
+    HANDLE hThread  = NULL;
+    HANDLE hPipe    = NULL;     // read end of stdout/stderr
+    HANDLE hReader  = NULL;     // pipe reader thread
+    HANDLE hJob     = NULL;     // kill-on-close job: the receiver and anything it spawns
+    int    index    = 0;
+    std::mutex              mtx;
+    std::deque<std::string> pending;   // lines waiting for the UI thread
+    size_t                  dropped = 0;
+};
+
+static Receiver g_rx[kMaxReceivers];
+static Session  g_sessions[kMaxReceivers];
+static int      g_rxCount = 1;         // receivers in the current/last run (UI shows this many)
+static std::string g_secret;   // receiver password, masked in captured output (set before readers start)
+static double   g_now = 0.0;           // ImGui clock, updated each frame
+
+static void Redact(std::string& line)
 {
-    if (IsUxPlayRunning()) return;
+    if (g_secret.empty()) return;
+    for (size_t p = line.find(g_secret); p != std::string::npos; p = line.find(g_secret, p + 3))
+        line.replace(p, g_secret.size(), "***");
+}
 
-    std::string args = BuildArgs(s);
-    std::wstring wArgs(args.begin(), args.end());
+static std::string RxTag(int i) { return i == 0 ? std::string("uxplay") : "uxplay" + std::to_string(i + 1); }
 
-    wchar_t exePath[MAX_PATH];
-    wcscpy_s(exePath, g_exeDir);
-    wcscat_s(exePath, L"uxplay.exe");
+static DWORD WINAPI PipeReaderThread(LPVOID param)
+{
+    Receiver& rx = *static_cast<Receiver*>(param);
+    const std::string tag = RxTag(rx.index);
+    std::string partial;
+    char buf[4096];
+    for (;;) {
+        DWORD got = 0;
+        if (!ReadFile(rx.hPipe, buf, sizeof(buf), &got, NULL) || got == 0) break;   // EOF / cancelled
+        partial.append(buf, got);
+        size_t start = 0, nl;
+        std::vector<std::string> lines;
+        while ((nl = partial.find('\n', start)) != std::string::npos) {
+            std::string line = partial.substr(start, nl - start);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            lines.push_back(line);
+            start = nl + 1;
+        }
+        partial.erase(0, start);
+        if (partial.size() > 64 * 1024) { lines.push_back(partial); partial.clear(); }   // no newline for ages
+        for (auto& l : lines) {
+            Redact(l);
+            if (l.compare(0, 15, "@uxplay-status ") == 0) g_log.Write("EVENT", tag.c_str(), l.substr(15));
+            else g_log.Write("OUT", tag.c_str(), l);
+        }
+        std::lock_guard<std::mutex> lk(rx.mtx);
+        for (auto& l : lines) rx.pending.push_back(std::move(l));
+        while (rx.pending.size() > 20000) { rx.pending.pop_front(); ++rx.dropped; }   // UI stalled: bound memory
+    }
+    if (!partial.empty()) {
+        Redact(partial);
+        g_log.Write("OUT", tag.c_str(), partial);
+        std::lock_guard<std::mutex> lk(rx.mtx);
+        rx.pending.push_back(partial);
+    }
+    return 0;
+}
 
-    std::wstring cmdLine = L"\"";
-    cmdLine += exePath;
-    cmdLine += L"\"";
-    if (!wArgs.empty()) { cmdLine += L" "; cmdLine += wArgs; }
+static void DrainPending(int i)
+{
+    Receiver& rx = g_rx[i];
+    std::deque<std::string> lines;
+    size_t dropped = 0;
+    {
+        std::lock_guard<std::mutex> lk(rx.mtx);
+        lines.swap(rx.pending);
+        dropped = rx.dropped; rx.dropped = 0;
+    }
+    if (dropped) g_sessions[i].AppNote(g_now, std::to_string(dropped) + " output lines skipped in the console (still in the log file).");
+    for (const auto& l : lines) g_sessions[i].OnLine(g_now, l);
+}
 
-    STARTUPINFOW si = {};
+// Joins the reader and closes all handles. The reader may be blocked in ReadFile
+// if a helper process inherited the pipe, so pending I/O is cancelled first.
+static void ReleaseProcessHandles(int i)
+{
+    Receiver& rx = g_rx[i];
+    if (rx.hReader) {
+        if (WaitForSingleObject(rx.hReader, 1500) == WAIT_TIMEOUT) {
+            CancelSynchronousIo(rx.hReader);
+            WaitForSingleObject(rx.hReader, 2000);
+        }
+        CloseHandle(rx.hReader); rx.hReader = NULL;
+    }
+    if (rx.hPipe)    { CloseHandle(rx.hPipe);    rx.hPipe = NULL; }
+    if (rx.hThread)  { CloseHandle(rx.hThread);  rx.hThread = NULL; }
+    if (rx.hProcess) { CloseHandle(rx.hProcess); rx.hProcess = NULL; }
+    if (rx.hJob)     { CloseHandle(rx.hJob);     rx.hJob = NULL; }   // kills any leftover child processes
+    DrainPending(i);
+}
+
+static bool RxRunning(int i)
+{
+    return g_rx[i].hProcess && WaitForSingleObject(g_rx[i].hProcess, 0) == WAIT_TIMEOUT;
+}
+
+static bool IsUxPlayRunning()   // any receiver
+{
+    for (int i = 0; i < kMaxReceivers; ++i) if (RxRunning(i)) return true;
+    return false;
+}
+
+// Detects exits the user did not ask for (called once per frame).
+static void PollProcess()
+{
+    for (int i = 0; i < kMaxReceivers; ++i) {
+        DrainPending(i);
+        if (g_rx[i].hProcess && WaitForSingleObject(g_rx[i].hProcess, 0) == WAIT_OBJECT_0) {
+            DWORD code = 0;
+            GetExitCodeProcess(g_rx[i].hProcess, &code);
+            ReleaseProcessHandles(i);
+            char buf[96];
+            snprintf(buf, sizeof(buf), "uxplay.exe exited on its own with code %lu", (unsigned long)code);
+            g_log.Write("WARN", RxTag(i).c_str(), buf);
+            g_sessions[i].OnProcessExited(g_now, (long)code);
+        }
+    }
+}
+
+static void SetOverlayRotation(int rot);
+static std::string DefaultName();
+
+static void LaunchOne(const Settings& s, int i)
+{
+    Receiver& rx = g_rx[i];
+    Session& ses = g_sessions[i];
+    if (rx.hProcess) ReleaseProcessHandles(i);    // previous run's leftovers
+    rx.index = i;
+
+    std::wstring exePath = g_exeDir + L"uxplay.exe";
+    if (GetFileAttributesW(exePath.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        g_log.Write("ERROR", "app", "uxplay.exe not found at " + Utf8(exePath));
+        ses.OnLaunchFailed(g_now, MakeMissingExeError(Utf8(exePath)));
+        return;
+    }
+
+    std::string args = BuildArgs(s, false, i, DefaultName());
+    std::wstring cmdLine = L"\"" + exePath + L"\"";
+    if (!args.empty()) cmdLine += L" " + Wide(args);
+    std::string redacted = "uxplay.exe " + BuildArgs(s, true, i, DefaultName());
+
+    // stdout+stderr -> one pipe; stdin -> NUL. Only these two handles are inherited.
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
+    HANDLE rd = NULL, wr = NULL;
+    if (!CreatePipe(&rd, &wr, &sa, 64 * 1024)) {
+        DWORD e = GetLastError();
+        g_log.Write("ERROR", "app", "CreatePipe failed: " + LastErrorText(e));
+        ses.OnLaunchFailed(g_now, MakeLaunchError(LastErrorText(e), e));
+        return;
+    }
+    SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+    HANDLE nul = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
+
+    SIZE_T attrSize = 0;
+    InitializeProcThreadAttributeList(NULL, 1, 0, &attrSize);
+    std::vector<char> attrBuf(attrSize);
+    auto attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrBuf.data());
+    HANDLE inherit[2] = { wr, nul };
+    bool haveList = InitializeProcThreadAttributeList(attrs, 1, 0, &attrSize) &&
+                    UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherit,
+                                              (nul != INVALID_HANDLE_VALUE ? 2 : 1) * sizeof(HANDLE), NULL, NULL);
+
+    STARTUPINFOEXW si = {};
+    si.StartupInfo.cb = sizeof(si);
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    si.StartupInfo.hStdOutput = wr;
+    si.StartupInfo.hStdError  = wr;
+    si.StartupInfo.hStdInput  = nul != INVALID_HANDLE_VALUE ? nul : NULL;
+    if (haveList) si.lpAttributeList = attrs;
+
     PROCESS_INFORMATION pi = {};
-    si.cb = sizeof(si);
-
     std::vector<wchar_t> buf(cmdLine.begin(), cmdLine.end());
     buf.push_back(0);
+    // Started suspended and placed in a kill-on-close job before it runs, so the
+    // receiver (and helpers it starts) can never outlive the launcher, even if the
+    // launcher is killed or crashes.
+    BOOL ok = CreateProcessW(NULL, buf.data(), NULL, NULL, TRUE,
+                             CREATE_NO_WINDOW | CREATE_SUSPENDED | (haveList ? EXTENDED_STARTUPINFO_PRESENT : 0),
+                             NULL, g_exeDir.c_str(), &si.StartupInfo, &pi);
+    DWORD err = ok ? 0 : GetLastError();
+    if (haveList) DeleteProcThreadAttributeList(attrs);
+    CloseHandle(wr);                                   // child owns the write end now
+    if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
 
-    if (CreateProcessW(NULL, buf.data(), NULL, NULL, FALSE,
-                       CREATE_NEW_CONSOLE, NULL, g_exeDir[0] ? g_exeDir : NULL,
-                       &si, &pi)) {
-        g_hProcess = pi.hProcess;
-        g_hThread  = pi.hThread;
+    if (!ok) {
+        CloseHandle(rd);
+        g_log.Write("ERROR", "app", "CreateProcess failed: " + LastErrorText(err));
+        ses.OnLaunchFailed(g_now, MakeLaunchError(LastErrorText(err), err));
+        return;
     }
+    rx.hJob = CreateJobObjectW(NULL, NULL);
+    if (rx.hJob) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION li = {};
+        li.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (!SetInformationJobObject(rx.hJob, JobObjectExtendedLimitInformation, &li, sizeof(li)) ||
+            !AssignProcessToJobObject(rx.hJob, pi.hProcess)) {
+            g_log.Write("WARN", "app", "Could not attach receiver to a job: " + LastErrorText(GetLastError()));
+            CloseHandle(rx.hJob); rx.hJob = NULL;
+        }
+    }
+    ResumeThread(pi.hThread);
+    rx.hProcess = pi.hProcess;
+    rx.hThread  = pi.hThread;
+    rx.hPipe    = rd;
+    rx.hReader  = CreateThread(NULL, 0, PipeReaderThread, &rx, 0, NULL);
+    g_log.Write("INFO", RxTag(i).c_str(), "Started (PID " + std::to_string(pi.dwProcessId) + "): " + redacted);
+    ses.OnLaunched(g_now, pi.dwProcessId, redacted);
+}
+
+static void LaunchUxPlay(const Settings& s)
+{
+    if (IsUxPlayRunning()) return;                 // a run is already active: never duplicate receivers
+    g_secret = s.password;
+    g_rxCount = 1;   // more are started on demand (UpdateReceiverPool)
+    for (int i = 1; i < kMaxReceivers; ++i) g_sessions[i] = Session();
+    LaunchOne(s, 0);
+}
+
+static void StopOne(int i, const char* why)
+{
+    if (!g_rx[i].hProcess) return;
+    if (RxRunning(i)) {
+        g_sessions[i].OnStoppedByUser(g_now);   // first, so the exit is not reported as a crash
+        if (g_rx[i].hJob) TerminateJobObject(g_rx[i].hJob, 0);   // whole process tree
+        else              TerminateProcess(g_rx[i].hProcess, 0);
+        WaitForSingleObject(g_rx[i].hProcess, 3000);
+        g_log.Write("INFO", RxTag(i).c_str(), why);
+    }
+    ReleaseProcessHandles(i);
 }
 
 static void StopUxPlay()
 {
-    if (!g_hProcess) return;
-    TerminateProcess(g_hProcess, 0);
-    CloseHandle(g_hProcess); g_hProcess = NULL;
-    CloseHandle(g_hThread);  g_hThread  = NULL;
+    SetOverlayRotation(0);
+    for (int i = 0; i < kMaxReceivers; ++i) StopOne(i, "Receiver stopped by user");
+}
+
+// Multiple phones: a receiver serves one phone. While every running receiver is
+// in use, start the next one ("<name> 2", ...) so another phone can connect, up
+// to the "Phones at once" maximum; close extra receivers again once two or more
+// sit idle. Receiver 1 always stays up while the user has the receiver started.
+static void UpdateReceiverPool(const Settings& s)
+{
+    if (!RxRunning(0)) return;
+    int maxRx = s.receivers < 1 ? 1 : (s.receivers > kMaxReceivers ? kMaxReceivers : s.receivers);
+    int idle = 0, starting = 0;
+    for (int i = 0; i < g_rxCount; ++i) {
+        Phase p = g_sessions[i].phase;
+        if (p == Phase::Starting) ++starting;
+        else if (p == Phase::Waiting || (p == Phase::Error && !g_sessions[i].error.fatal)) ++idle;
+    }
+    if (idle == 0 && starting == 0 && g_rxCount < maxRx) {
+        int i = g_rxCount++;
+        g_log.Write("INFO", "app", "All receivers in use; starting receiver " + std::to_string(i + 1));
+        LaunchOne(s, i);
+    } else if (idle >= 2 && g_rxCount > 1) {
+        int last = g_rxCount - 1;   // only trim from the end so names stay contiguous
+        Phase p = g_sessions[last].phase;
+        if (p == Phase::Waiting || p == Phase::Off) {
+            StopOne(last, "Spare receiver closed (no longer needed)");
+            g_sessions[last] = Session();
+            --g_rxCount;
+        }
+    }
 }
 
 // ── Player window rotation overlay (GDI PlgBlt, no stream reconnect) ──────────
 
 static HWND   g_hOverlay   = NULL;
 static int    g_overlayRot = 0;   // 0=none, 1=90°CW, 2=180°, 3=270°CW
+static int    g_overlayRx  = 0;   // receiver whose player window is rotated
 
-static HWND FindProcessWindow()
+static HWND FindProcessWindow(int i)
 {
-    if (!IsUxPlayRunning()) return NULL;
-    DWORD targetPid = GetProcessId(g_hProcess);
+    if (!RxRunning(i)) return NULL;
+    DWORD targetPid = GetProcessId(g_rx[i].hProcess);
     struct Ctx { DWORD pid; HWND hwnd; };
     Ctx ctx = { targetPid, NULL };
     EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
@@ -238,7 +502,7 @@ static void UpdateOverlay()
 {
     if (!g_hOverlay || !IsWindow(g_hOverlay)) return;
 
-    HWND hUx = FindProcessWindow();
+    HWND hUx = FindProcessWindow(g_overlayRx);
     if (!hUx || !IsWindow(hUx)) {
         ShowWindow(g_hOverlay, SW_HIDE);
         return;
@@ -313,11 +577,203 @@ static void SetOverlayRotation(int rot)
     UpdateOverlay();
 }
 
+// ── Icons ─────────────────────────────────────────────────────────────────────
+
+static HICON g_iconBig = NULL, g_iconSmall = NULL;
+
+static void LoadAppIcons(HINSTANCE hInst)
+{
+    g_iconBig   = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDI_UXPLAY), IMAGE_ICON,
+                                    GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR);
+    g_iconSmall = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDI_UXPLAY), IMAGE_ICON,
+                                    GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
+    if (!g_iconBig)   g_iconBig   = LoadIcon(NULL, IDI_APPLICATION);
+    if (!g_iconSmall) g_iconSmall = g_iconBig;
+}
+
+extern Settings g_settings;
+
+// ── Player windows (owned by uxplay.exe / GStreamer) ──────────────────────────
+// The launcher cannot change the renderer's code, but it can manage its window:
+//  * icon + title ("UxPlay — <receiver name>") for the taskbar and Alt+Tab
+//  * size: when a stream starts or the phone rotates, the window's client area is
+//    resized to the video's aspect ratio (no black bars); after the user resizes
+//    it, the other dimension is adjusted to keep that aspect ratio
+//  * right-click menu (rotate / reset / fit), via a low-level mouse hook that is
+//    installed only while a receiver runs and only reacts on player windows
+
+struct PlayerWin {
+    HWND   hwnd = NULL;
+    int    sizeSerial = 0;       // last Session::videoSizeSerial applied
+    RECT   last = {};            // rect after our last change / observation
+    int    keep = 1;             // 1 = user changed width most, 2 = height
+    double changedAt = 0.0;
+    bool   pending = false;      // user resize waiting to be aspect-corrected
+};
+static PlayerWin g_player[kMaxReceivers];
+
+static bool SameRect(const RECT& a, const RECT& b)
+{
+    return a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom;
+}
+
+// Resizes the client area to vw:vh. keep: 0 = keep the longer side (new stream /
+// rotation), 1 = keep width, 2 = keep height (user resize). Never touches a
+// maximized, minimized or borderless (fullscreen) window.
+static void FitPlayer(int i, unsigned vw, unsigned vh, int keep)
+{
+    HWND h = g_player[i].hwnd;
+    if (!h || !vw || !vh || IsZoomed(h) || IsIconic(h)) return;
+    if (!(GetWindowLongW(h, GWL_STYLE) & WS_CAPTION)) return;
+    if (g_overlayRot & 1 && g_overlayRx == i) { unsigned t = vw; vw = vh; vh = t; }   // shown rotated
+    RECT wr, cr;
+    GetWindowRect(h, &wr); GetClientRect(h, &cr);
+    int cw = cr.right, ch = cr.bottom;
+    if (cw <= 0 || ch <= 0) return;
+    int fw = (wr.right - wr.left) - cw, fh = (wr.bottom - wr.top) - ch;
+    MONITORINFO mi = {}; mi.cbSize = sizeof(mi);
+    GetMonitorInfoW(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mi);
+    RECT wa = mi.rcWork;
+    int maxW = (wa.right - wa.left) - fw, maxH = (wa.bottom - wa.top) - fh;
+
+    int nw, nh;
+    if (keep == 1)      { nw = cw; nh = MulDiv(cw, vh, vw); }
+    else if (keep == 2) { nh = ch; nw = MulDiv(ch, vw, vh); }
+    else {
+        int side = cw > ch ? cw : ch;
+        if (vw >= vh) { nw = side; nh = MulDiv(side, vh, vw); } else { nh = side; nw = MulDiv(side, vw, vh); }
+    }
+    if (nh > maxH) { nh = maxH; nw = MulDiv(nh, vw, vh); }
+    if (nw > maxW) { nw = maxW; nh = MulDiv(nw, vh, vw); }
+    if (nw < 160 || nh < 120) return;
+    if (abs(nw - cw) <= 2 && abs(nh - ch) <= 2) return;
+
+    int W = nw + fw, H = nh + fh;
+    int x = wr.left, y = wr.top;
+    if (keep == 0) { x = wr.left + ((wr.right - wr.left) - W) / 2; y = wr.top + ((wr.bottom - wr.top) - H) / 2; }
+    if (x + W > wa.right) x = wa.right - W;
+    if (y + H > wa.bottom) y = wa.bottom - H;
+    if (x < wa.left) x = wa.left;
+    if (y < wa.top) y = wa.top;
+    SetWindowPos(h, NULL, x, y, W, H, SWP_NOZORDER | SWP_NOACTIVATE);
+    GetWindowRect(h, &g_player[i].last);
+}
+
+static void ManagePlayerWindows()
+{
+    for (int i = 0; i < kMaxReceivers; ++i) {
+        PlayerWin& pw = g_player[i];
+        HWND h = RxRunning(i) ? FindProcessWindow(i) : NULL;
+        if (h != pw.hwnd) {   // new window (stream started) or gone
+            pw = PlayerWin();
+            pw.hwnd = h;
+            if (h) {
+                SendMessageTimeoutW(h, WM_SETICON, ICON_BIG,   (LPARAM)g_iconBig,   SMTO_ABORTIFHUNG, 200, NULL);
+                SendMessageTimeoutW(h, WM_SETICON, ICON_SMALL, (LPARAM)g_iconSmall, SMTO_ABORTIFHUNG, 200, NULL);
+                std::wstring title = L"UxPlay \x2014 " + Wide(ReceiverName(g_settings, i, DefaultName()));
+                SendMessageTimeoutW(h, WM_SETTEXT, 0, (LPARAM)title.c_str(), SMTO_ABORTIFHUNG, 200, NULL);
+                GetWindowRect(h, &pw.last);
+            }
+        }
+        if (!h) continue;
+        const Session& se = g_sessions[i];
+        if (se.videoSizeSerial != pw.sizeSerial && se.videoW) {   // new stream or rotation
+            pw.sizeSerial = se.videoSizeSerial;
+            FitPlayer(i, se.videoW, se.videoH, 0);
+            continue;
+        }
+        RECT r; GetWindowRect(h, &r);
+        if (!SameRect(r, pw.last)) {   // moved or resized by the user
+            int dw = abs((r.right - r.left) - (pw.last.right - pw.last.left));
+            int dh = abs((r.bottom - r.top) - (pw.last.bottom - pw.last.top));
+            if (dw || dh) { pw.pending = true; pw.changedAt = g_now; pw.keep = dw >= dh ? 1 : 2; }
+            pw.last = r;
+        }
+        // Correct the aspect once the drag is over (mouse released, size stable).
+        if (pw.pending && GetAsyncKeyState(VK_LBUTTON) >= 0 && g_now - pw.changedAt > 0.25) {
+            pw.pending = false;
+            if (se.videoW) FitPlayer(i, se.videoW, se.videoH, pw.keep);
+        }
+    }
+}
+
+static int PlayerIndexAt(POINT pt)
+{
+    HWND top = GetAncestor(WindowFromPoint(pt), GA_ROOT);
+    for (int i = 0; i < kMaxReceivers; ++i)
+        if (top && g_player[i].hwnd == top) return i;
+    return -1;
+}
+
+#define WM_APP_PLAYERMENU (WM_APP + 4)
+static HWND  g_menuOwner = NULL;
+static HHOOK g_mouseHook = NULL;
+
+static LRESULT CALLBACK MouseHookProc(int code, WPARAM wp, LPARAM lp)
+{
+    if (code == HC_ACTION && (wp == WM_RBUTTONDOWN || wp == WM_RBUTTONUP)) {
+        const MSLLHOOKSTRUCT* m = reinterpret_cast<const MSLLHOOKSTRUCT*>(lp);
+        int i = PlayerIndexAt(m->pt);
+        if (i >= 0) {
+            if (wp == WM_RBUTTONUP && g_menuOwner)
+                PostMessageW(g_menuOwner, WM_APP_PLAYERMENU, (WPARAM)i, MAKELPARAM(m->pt.x, m->pt.y));
+            return 1;   // the player itself has no right-click use; keep it from seeing the click
+        }
+    }
+    return CallNextHookEx(g_mouseHook, code, wp, lp);
+}
+
+static void UpdateMouseHook()
+{
+    bool want = IsUxPlayRunning();
+    if (want && !g_mouseHook)  g_mouseHook = SetWindowsHookExW(WH_MOUSE_LL, MouseHookProc, GetModuleHandleW(NULL), 0);
+    if (!want && g_mouseHook) { UnhookWindowsHookEx(g_mouseHook); g_mouseHook = NULL; }
+}
+
+static void ShowPlayerMenu(int i, POINT pt)
+{
+    enum { kRotate = 1, kRotate180, kRotateCcw, kReset, kFit };
+    int rot = g_overlayRx == i ? g_overlayRot : 0;
+    const Session& se = g_sessions[i];
+    HMENU m = CreatePopupMenu();
+    AppendMenuW(m, MF_STRING, kRotate,    L"Rotate 90\x00b0 clockwise");
+    AppendMenuW(m, MF_STRING, kRotateCcw, L"Rotate 90\x00b0 counter-clockwise");
+    AppendMenuW(m, MF_STRING, kRotate180, L"Rotate 180\x00b0");
+    AppendMenuW(m, MF_STRING | (rot ? 0 : MF_GRAYED), kReset, L"Reset rotation");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(m, MF_STRING | (se.videoW ? 0 : MF_GRAYED), kFit, L"Fit window to video");
+    SetForegroundWindow(g_menuOwner);   // required so the menu closes when clicking elsewhere
+    int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_menuOwner, NULL);
+    DestroyMenu(m);
+    PostMessageW(g_menuOwner, WM_NULL, 0, 0);
+    if (cmd >= kRotate && cmd <= kReset) {
+        if (g_overlayRx != i) { SetOverlayRotation(0); g_overlayRx = i; rot = 0; }   // one rotated player at a time
+        int next = cmd == kRotate ? rot + 1 : cmd == kRotateCcw ? rot + 3 : cmd == kRotate180 ? rot + 2 : 0;
+        SetOverlayRotation(next % 4);
+        g_log.Write("INFO", RxTag(i).c_str(), "Player rotation set to " + std::to_string((next % 4) * 90) + " degrees");
+    } else if (cmd == kFit) {
+        FitPlayer(i, se.videoW, se.videoH, 0);
+    }
+}
+
+static LRESULT WINAPI MenuOwnerProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_APP_PLAYERMENU) {
+        POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+        ShowPlayerMenu((int)wParam, pt);
+        return 0;
+    }
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
 // ── System tray ───────────────────────────────────────────────────────────────
 
-static NOTIFYICONDATA g_nid    = {};
-static bool           g_inTray = false;
-#define WM_TRAYICON (WM_APP + 1)
+static NOTIFYICONDATAW g_nid       = {};
+static bool            g_inTray    = false;
+static bool            g_trayHinted = false;
+#define WM_TRAYICON     (WM_APP + 1)
+#define WM_APP_ACTIVATE (WM_APP + 2)   // sent by a second launcher instance
+#define WM_APP_EXIT     (WM_APP + 3)   // File > Exit, deferred until the frame ends
 
 static void MinimizeToTray(HWND hWnd)
 {
@@ -328,21 +784,334 @@ static void MinimizeToTray(HWND hWnd)
     g_nid.uID              = 1;
     g_nid.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_nid.uCallbackMessage = WM_TRAYICON;
-    g_nid.hIcon            = (HICON)LoadImage(NULL, IDI_APPLICATION, IMAGE_ICON, 0, 0, LR_SHARED);
-    wcscpy_s(g_nid.szTip, L"UxPlay \x2014 running");
+    g_nid.hIcon            = g_iconSmall;
+    wcscpy_s(g_nid.szTip, IsUxPlayRunning() ? L"UxPlay \x2014 receiver running" : L"UxPlay");
+    if (!g_trayHinted && IsUxPlayRunning()) {   // explain once why the window disappeared
+        g_nid.uFlags |= NIF_INFO;
+        wcscpy_s(g_nid.szInfoTitle, L"UxPlay is still running");
+        wcscpy_s(g_nid.szInfo, L"The receiver keeps running in the notification area. "
+                               L"Double-click the icon to reopen. Closing the window quits UxPlay.");
+        g_nid.dwInfoFlags = NIIF_USER | NIIF_NOSOUND;
+        g_trayHinted = true;
+    }
     Shell_NotifyIconW(NIM_ADD, &g_nid);
     ShowWindow(hWnd, SW_HIDE);
     g_inTray = true;
 }
 
-static void RestoreFromTray(HWND hWnd)
+static void RestoreWindow(HWND hWnd)
 {
-    if (!g_inTray) return;
-    Shell_NotifyIconW(NIM_DELETE, &g_nid);
+    if (g_inTray) { Shell_NotifyIconW(NIM_DELETE, &g_nid); g_inTray = false; }
     ShowWindow(hWnd, SW_SHOW);
-    ShowWindow(hWnd, SW_RESTORE);
+    if (IsIconic(hWnd)) ShowWindow(hWnd, SW_RESTORE);
     SetForegroundWindow(hWnd);
-    g_inTray = false;
+}
+
+// ── Preferences, theme and placement ──────────────────────────────────────────
+
+Settings g_settings;   // also used by the player-window code above
+static UiPrefs  g_prefs;
+static UiState  g_ui;
+static bool     g_prefsDirty = false;
+static double   g_prefsDirtyAt = 0.0;
+static HWND     g_hwnd = NULL;
+static bool     g_dpiChanged = false;
+static float    g_dpiScale = 1.0f;
+
+static std::wstring SettingsPath() { return g_dataDir + L"uxplay-settings.ini"; }
+static std::wstring PrefsPath()    { return g_dataDir + L"launcher-prefs.ini"; }
+
+static void LoadSettingsFile()
+{
+    std::string text;
+    if (ReadFileUtf8(SettingsPath(), &text)) {
+        ParseSettings(g_settings, text);
+        g_log.Write("INFO", "app", "Loaded settings from " + Utf8(SettingsPath()));
+    } else if (ReadFileUtf8(g_exeDir + L"uxplay-settings.ini", &text)) {
+        // Older launchers saved next to the exe (not writable under Program Files).
+        // Read it once; the next save goes to %APPDATA%. The old file is left untouched.
+        ParseSettings(g_settings, text);
+        g_log.Write("INFO", "app", "Imported settings from " + Utf8(g_exeDir) + "uxplay-settings.ini");
+    } else {
+        g_log.Write("INFO", "app", "No saved settings; using defaults");
+    }
+}
+
+static bool HostSave(const Settings& s)
+{
+    bool ok = WriteFileAtomic(SettingsPath(), SerializeSettings(s));
+    if (ok) g_log.Write("INFO", "app", "Settings saved");
+    else    g_log.Write("ERROR", "app", "Could not save settings to " + Utf8(SettingsPath()) + ": " + LastErrorText(GetLastError()));
+    return ok;
+}
+
+static void CaptureWindowGeometry()
+{
+    if (!g_hwnd) return;
+    WINDOWPLACEMENT wp = {};
+    wp.length = sizeof(wp);
+    if (!GetWindowPlacement(g_hwnd, &wp)) return;
+    RECT r = wp.rcNormalPosition;
+    g_prefs.x = r.left; g_prefs.y = r.top; g_prefs.w = r.right - r.left; g_prefs.h = r.bottom - r.top;
+    g_prefs.maximized = (wp.showCmd == SW_SHOWMAXIMIZED) || (IsZoomed(g_hwnd) != 0);
+}
+
+static void SavePrefs(bool captureGeometry)
+{
+    if (captureGeometry) CaptureWindowGeometry();
+    if (!WriteFileAtomic(PrefsPath(), SerializePrefs(g_prefs)))
+        g_log.Write("WARN", "app", "Could not save launcher preferences: " + LastErrorText(GetLastError()));
+    g_prefsDirty = false;
+}
+
+static void MarkPrefsDirty() { g_prefsDirty = true; g_prefsDirtyAt = g_now; }
+
+static bool ReadSystemDark()
+{
+    DWORD v = 1, sz = sizeof(v);
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                     L"AppsUseLightTheme", RRF_RT_REG_DWORD, NULL, &v, &sz) == ERROR_SUCCESS)
+        return v == 0;
+    return true;   // the launcher's original look was dark
+}
+
+static bool ReadReduceMotion()
+{
+    BOOL anim = TRUE;
+    if (SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &anim, 0)) return !anim;
+    return false;
+}
+
+static void HostThemeApplied(bool dark)
+{
+    if (!g_hwnd) return;
+    BOOL d = dark ? TRUE : FALSE;
+    DwmSetWindowAttribute(g_hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &d, sizeof(d));
+    COLORREF caption = dark ? RGB(0x11, 0x12, 0x17) : RGB(0xE9, 0xEA, 0xF0);
+    DwmSetWindowAttribute(g_hwnd, 35 /* DWMWA_CAPTION_COLOR (Windows 11) */, &caption, sizeof(caption));
+}
+
+// Applies saved geometry only if enough of it is visible on a current monitor;
+// otherwise the window is centered on the monitor it would have opened on.
+static void RestorePlacement(HWND hwnd, int defaultW, int defaultH)
+{
+    WINDOWPLACEMENT wp = {};
+    wp.length = sizeof(wp);
+    GetWindowPlacement(hwnd, &wp);
+    RECT r = wp.rcNormalPosition;
+    if (g_prefs.w > 0 && g_prefs.h > 0) {
+        r = { g_prefs.x, g_prefs.y, g_prefs.x + g_prefs.w, g_prefs.y + g_prefs.h };
+    } else {
+        r.right = r.left + defaultW; r.bottom = r.top + defaultH;
+    }
+    HMONITOR mon = MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    GetMonitorInfoW(mon, &mi);
+    RECT wa = mi.rcWork, vis;
+    int w = r.right - r.left, h = r.bottom - r.top;
+    if (w > wa.right - wa.left) w = wa.right - wa.left;
+    if (h > wa.bottom - wa.top) h = wa.bottom - wa.top;
+    bool visibleEnough = IntersectRect(&vis, &r, &wa) && (vis.right - vis.left) >= 160 && (vis.bottom - vis.top) >= 80
+                         && r.top >= wa.top - 8;   // title bar must be reachable
+    if (!visibleEnough || g_prefs.w == 0) {
+        r.left = wa.left + ((wa.right - wa.left) - w) / 2;
+        r.top  = wa.top  + ((wa.bottom - wa.top) - h) / 2;
+    }
+    r.right = r.left + w; r.bottom = r.top + h;
+    wp.rcNormalPosition = r;
+    wp.showCmd = g_prefs.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
+    wp.flags = 0;
+    SetWindowPlacement(hwnd, &wp);
+}
+
+// ── Storage folders ───────────────────────────────────────────────────────────
+// Chosen locations live in the registry (Software\UxPlay, values SettingsDir and
+// LogDir): HKCU is the user's choice made in the app; HKLM is the default the
+// installer offered; otherwise %APPDATA%\UxPlay and %LOCALAPPDATA%\UxPlay\logs.
+
+static const wchar_t* kRegKey = L"Software\\UxPlay";
+static const wchar_t* kRegVal[2] = { L"SettingsDir", L"LogDir" };
+
+static std::wstring DefaultDir(int which)
+{
+    return which == 0 ? EnsureDir(KnownFolder(FOLDERID_RoamingAppData), L"UxPlay")
+                      : EnsureDir(KnownFolder(FOLDERID_LocalAppData), L"UxPlay\\logs");
+}
+
+static std::wstring RegDir(HKEY root, int which)
+{
+    wchar_t buf[MAX_PATH * 2] = {};
+    DWORD sz = sizeof(buf);
+    if (RegGetValueW(root, kRegKey, kRegVal[which], RRF_RT_REG_SZ, NULL, buf, &sz) == ERROR_SUCCESS) return buf;
+    // The (32-bit) NSIS installer writes HKLM through the WOW64 view.
+    sz = sizeof(buf);
+    if (root == HKEY_LOCAL_MACHINE &&
+        RegGetValueW(root, kRegKey, kRegVal[which], RRF_RT_REG_SZ | RRF_SUBKEY_WOW6432KEY, NULL, buf, &sz) == ERROR_SUCCESS)
+        return buf;
+    return L"";
+}
+
+static std::wstring WithSlash(std::wstring d)
+{
+    if (!d.empty() && d.back() != L'\\' && d.back() != L'/') d += L'\\';
+    return d;
+}
+
+// Creates the folder if needed and checks that a file can be written there.
+static bool UsableDir(const std::wstring& dir)
+{
+    if (dir.empty()) return false;
+    int r = SHCreateDirectoryExW(NULL, dir.c_str(), NULL);
+    if (r != ERROR_SUCCESS && r != ERROR_ALREADY_EXISTS && r != ERROR_FILE_EXISTS) return false;
+    std::wstring probe = WithSlash(dir) + L".uxplay-write-test";
+    HANDLE h = CreateFileW(probe.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    CloseHandle(h);
+    return true;
+}
+
+static bool g_dirIsDefault[2] = { true, true };
+
+static std::wstring ResolveDir(int which)
+{
+    std::wstring cands[2] = { RegDir(HKEY_CURRENT_USER, which), RegDir(HKEY_LOCAL_MACHINE, which) };
+    for (const auto& c : cands) {
+        if (c.empty()) continue;
+        if (UsableDir(c)) { g_dirIsDefault[which] = false; return WithSlash(c); }
+        g_log.Write("WARN", "app", "Configured folder not usable, using default: " + Utf8(c));
+    }
+    g_dirIsDefault[which] = true;
+    return DefaultDir(which);
+}
+
+static std::wstring PickFolder(const std::wstring& start, const wchar_t* title)
+{
+    std::wstring out;
+    IFileOpenDialog* dlg = NULL;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return out;
+    DWORD opts = 0;
+    dlg->GetOptions(&opts);
+    dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+    dlg->SetTitle(title);
+    IShellItem* folder = NULL;
+    if (!start.empty() && SUCCEEDED(SHCreateItemFromParsingName(start.c_str(), NULL, IID_PPV_ARGS(&folder)))) {
+        dlg->SetFolder(folder);
+        folder->Release();
+    }
+    if (SUCCEEDED(dlg->Show(g_hwnd))) {
+        IShellItem* item = NULL;
+        if (SUCCEEDED(dlg->GetResult(&item))) {
+            PWSTR p = NULL;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &p)) && p) { out = p; CoTaskMemFree(p); }
+            item->Release();
+        }
+    }
+    dlg->Release();
+    return out;
+}
+
+// Switches a storage folder: writes the current settings/preferences there (or
+// reopens the log there), then remembers the choice in HKCU. Files in the old
+// folder are left untouched.
+static bool ApplyDir(int which, const std::wstring& dir, std::string* message)
+{
+    std::wstring d = WithSlash(dir);
+    if (!UsableDir(d)) {
+        if (message) *message = "Can't write to that folder. Choose a different one.";
+        return false;
+    }
+    if (which == 0) {
+        std::wstring old = g_dataDir;
+        g_dataDir = d;
+        if (!WriteFileAtomic(SettingsPath(), SerializeSettings(g_settings))) {
+            g_dataDir = old;
+            if (message) *message = "Could not save settings in that folder.";
+            return false;
+        }
+        SavePrefs(true);
+        g_log.Write("INFO", "app", "Settings folder changed to " + Utf8(d));
+    } else {
+        g_logDir = d;
+        g_log.Open(g_logDir);
+        g_log.Write("INFO", "app", "Logs folder changed to " + Utf8(d));
+    }
+    return true;
+}
+
+static void RememberDir(int which, const std::wstring* dir)   // nullptr = forget (use default)
+{
+    HKEY k = NULL;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegKey, 0, NULL, 0, KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) return;
+    if (dir) RegSetValueExW(k, kRegVal[which], 0, REG_SZ, (const BYTE*)dir->c_str(), (DWORD)((dir->size() + 1) * sizeof(wchar_t)));
+    else     RegDeleteValueW(k, kRegVal[which]);
+    RegCloseKey(k);
+}
+
+static const char* HostFolderPath(int which)
+{
+    static std::string buf[2];
+    buf[which] = Utf8(which == 0 ? g_dataDir : g_logDir);
+    if (!buf[which].empty() && buf[which].back() == '\\') buf[which].pop_back();
+    return buf[which].c_str();
+}
+
+static bool HostFolderIsDefault(int which) { return g_dirIsDefault[which]; }
+
+static int HostChooseFolder(int which, std::string* message)
+{
+    std::wstring cur = which == 0 ? g_dataDir : g_logDir;
+    std::wstring dir = PickFolder(cur, which == 0 ? L"Choose where UxPlay saves its settings"
+                                                  : L"Choose where UxPlay saves its logs");
+    if (dir.empty()) return 0;
+    if (!ApplyDir(which, dir, message)) return -1;
+    RememberDir(which, &dir);
+    g_dirIsDefault[which] = false;
+    if (message) *message = which == 0 ? "Settings folder changed" : "Logs folder changed";
+    return 1;
+}
+
+static void HostResetFolder(int which)
+{
+    RememberDir(which, nullptr);
+    std::wstring machine = RegDir(HKEY_LOCAL_MACHINE, which);   // installer's choice, if any
+    std::wstring dir = (!machine.empty() && UsableDir(machine)) ? machine : DefaultDir(which);
+    ApplyDir(which, dir, nullptr);
+    g_dirIsDefault[which] = machine.empty();
+}
+
+static std::string DefaultName()
+{
+    return g_ui.computerName.empty() ? std::string("UxPlay") : "UxPlay@" + g_ui.computerName;
+}
+
+// ── UI host bindings ──────────────────────────────────────────────────────────
+
+static void OpenPath(const std::wstring& p)
+{
+    HINSTANCE r = ShellExecuteW(g_hwnd, L"open", p.c_str(), NULL, NULL, SW_SHOWNORMAL);
+    if ((INT_PTR)r <= 32) g_log.Write("WARN", "app", "Could not open " + Utf8(p));
+}
+
+static void HostStart(const Settings& s)      { LaunchUxPlay(s); }
+static void HostStop()                        { StopUxPlay(); }
+static int  HostGetRotation()                 { return g_overlayRot; }
+static void HostSetRotation(int rot)          { SetOverlayRotation(rot); }
+static void HostOpenLogFile()                 { OpenPath(g_log.Path()); }
+static void HostOpenLogFolder()               { OpenPath(g_logDir); }
+static void HostOpenSettingsFolder()          { OpenPath(g_dataDir); }
+static const char* HostLogStatus()            { return g_log.Problem(); }
+static void HostExit()                        { if (g_hwnd) PostMessageW(g_hwnd, WM_APP_EXIT, 0, 0); }
+
+static void HostOpenDocs()
+{
+    const wchar_t* local[] = { L"README.md", L"README.html" };
+    for (const wchar_t* f : local) {
+        std::wstring p = g_exeDir + f;
+        if (GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES) { OpenPath(p); return; }
+    }
+    OpenPath(L"https://github.com/Chr0mX/UxPlay#readme");
 }
 
 // ── D3D11 device / swap chain ─────────────────────────────────────────────────
@@ -370,6 +1139,10 @@ static bool CreateDeviceD3D(HWND hWnd)
     HRESULT hr = D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0,
         levels, 2, D3D11_SDK_VERSION, &sd, &g_pSwapChain,
         &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext);
+    if (hr == DXGI_ERROR_UNSUPPORTED)   // no hardware D3D11 (e.g. some VMs): use WARP
+        hr = D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_WARP, NULL, 0,
+            levels, 2, D3D11_SDK_VERSION, &sd, &g_pSwapChain,
+            &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext);
     if (FAILED(hr)) return false;
 
     ID3D11Texture2D* pBackBuffer = NULL;
@@ -418,37 +1191,74 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             g_pSwapChain->ResizeBuffers(0, (UINT)LOWORD(lParam), (UINT)HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
             CreateRenderTarget();
         }
+        if (wParam == SIZE_MAXIMIZED || wParam == SIZE_RESTORED) MarkPrefsDirty();
         return 0;
+    case WM_EXITSIZEMOVE:
+        MarkPrefsDirty();
+        return 0;
+    case WM_GETMINMAXINFO: {
+        UINT dpi = GetDpiForWindow(hWnd);
+        if (!dpi) dpi = 96;
+        auto* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
+        mmi->ptMinTrackSize.x = MulDiv(560, dpi, 96);
+        mmi->ptMinTrackSize.y = MulDiv(500, dpi, 96);
+        return 0;
+    }
+    case WM_DPICHANGED: {
+        const RECT* r = reinterpret_cast<const RECT*>(lParam);
+        SetWindowPos(hWnd, NULL, r->left, r->top, r->right - r->left, r->bottom - r->top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        g_dpiScale = HIWORD(wParam) / 96.0f;
+        g_dpiChanged = true;   // fonts and sizes are rebuilt before the next frame
+        return 0;
+    }
+    case WM_SETTINGCHANGE:
+        if (lParam && lstrcmpW(reinterpret_cast<LPCWSTR>(lParam), L"ImmersiveColorSet") == 0)
+            g_ui.systemDark = ReadSystemDark();
+        g_ui.reduceMotion = ReadReduceMotion();
+        break;
     case WM_SYSCOMMAND:
-        if ((wParam & 0xfff0) == SC_MINIMIZE) { MinimizeToTray(hWnd); return 0; }
+        if ((wParam & 0xfff0) == SC_MINIMIZE && IsUxPlayRunning()) { MinimizeToTray(hWnd); return 0; }
         if ((wParam & 0xfff0) == SC_KEYMENU)  return 0;
         break;
     case WM_CLOSE:
-        if (IsUxPlayRunning()) { MinimizeToTray(hWnd); }
-        else                   { DestroyWindow(hWnd); }
+        // Closing the window quits: all receivers are stopped (their jobs kill any
+        // helper processes) and the tray icon is removed. Minimize keeps the
+        // receiver running in the notification area instead.
+        DestroyWindow(hWnd);
         return 0;
     case WM_DESTROY:
+        CaptureWindowGeometry();   // last chance: the window is about to go away
         PostQuitMessage(0);
+        return 0;
+    case WM_APP_EXIT:
+        DestroyWindow(hWnd);
+        return 0;
+    case WM_APP_ACTIVATE:
+        RestoreWindow(hWnd);
         return 0;
     case WM_TRAYICON:
         if (lParam == WM_LBUTTONDBLCLK) {
-            RestoreFromTray(hWnd);
+            RestoreWindow(hWnd);
         } else if (lParam == WM_RBUTTONUP) {
             POINT pt; GetCursorPos(&pt);
             HMENU menu = CreatePopupMenu();
-            AppendMenuW(menu, MF_STRING, 1, L"Show");
+            AppendMenuW(menu, MF_STRING, 1, L"Show UxPlay");
             AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-            AppendMenuW(menu, MF_STRING | (IsUxPlayRunning() ? 0 : MF_GRAYED), 2, L"Stop UxPlay");
+            if (IsUxPlayRunning()) AppendMenuW(menu, MF_STRING, 2, L"Stop Receiver");
+            else                   AppendMenuW(menu, MF_STRING, 4, L"Start Receiver");
             AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
             AppendMenuW(menu, MF_STRING, 3, L"Exit");
+            SetMenuDefaultItem(menu, 1, FALSE);
             SetForegroundWindow(hWnd);  // required so menu dismisses on click-away
             int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                      pt.x, pt.y, 0, hWnd, NULL);
             DestroyMenu(menu);
             switch (cmd) {
-            case 1: RestoreFromTray(hWnd); break;
+            case 1: RestoreWindow(hWnd); break;
             case 2: StopUxPlay(); break;
-            case 3: StopUxPlay(); Shell_NotifyIconW(NIM_DELETE, &g_nid); DestroyWindow(hWnd); break;
+            case 4: LaunchUxPlay(g_settings); break;
+            case 3: PostMessageW(hWnd, WM_APP_EXIT, 0, 0); break;
             }
         }
         return 0;
@@ -456,57 +1266,96 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
-// ── Combo helper ──────────────────────────────────────────────────────────────
-
-static bool ComboOptions(const char* label, int* current, const Option* opts, int count)
-{
-    const char* preview = ((*current >= 0 && *current < count) ? opts[*current].label : "");
-    bool changed = false;
-    if (ImGui::BeginCombo(label, preview)) {
-        for (int i = 0; i < count; ++i) {
-            bool sel = (*current == i);
-            if (ImGui::Selectable(opts[i].label, sel)) { *current = i; changed = true; }
-            if (sel) ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
-    }
-    return changed;
-}
-
 // ── WinMain ───────────────────────────────────────────────────────────────────
+
+static UiFonts BuildFonts(float scale)
+{
+    wchar_t win[MAX_PATH] = L"C:\\Windows";
+    GetWindowsDirectoryW(win, MAX_PATH);
+    std::string fonts = Utf8(win) + "\\Fonts\\";
+    return LoadUiFonts(scale, (fonts + "segoeui.ttf").c_str(), (fonts + "seguisb.ttf").c_str(),
+                       (fonts + "consola.ttf").c_str());
+}
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
 {
-    // Determine exe directory for relative paths
-    GetModuleFileNameW(NULL, g_exeDir, MAX_PATH);
-    wchar_t* lastSlash = wcsrchr(g_exeDir, L'\\');
-    if (lastSlash) { lastSlash[1] = 0; } else { g_exeDir[0] = 0; }
+    // One launcher at a time: a second start brings the first one forward
+    // instead of starting a second receiver.
+    HANDLE single = CreateMutexW(NULL, TRUE, L"Local\\UxPlayLauncher.SingleInstance");
+    if (single && GetLastError() == ERROR_ALREADY_EXISTS) {
+        HWND other = FindWindowW(L"UxPlayGUI", NULL);
+        if (other) { AllowSetForegroundWindow(ASFW_ANY); PostMessageW(other, WM_APP_ACTIVATE, 0, 0); }
+        CloseHandle(single);
+        return 0;
+    }
+
+    // Executable directory for uxplay.exe, GStreamer and bundled docs.
+    wchar_t exe[MAX_PATH] = {};
+    GetModuleFileNameW(NULL, exe, MAX_PATH);
+    g_exeDir = exe;
+    size_t slash = g_exeDir.find_last_of(L'\\');
+    g_exeDir = slash == std::wstring::npos ? L"" : g_exeDir.substr(0, slash + 1);
+
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);   // folder picker
+    g_logDir  = ResolveDir(1);
+    g_log.Open(g_logDir);
+    g_dataDir = ResolveDir(0);
+    g_log.Write("INFO", "app", std::string("UxPlay launcher ") + UXPLAY_LAUNCHER_VERSION + " starting");
 
     // Set GStreamer environment so spawned uxplay.exe inherits it (replaces bat file)
-    std::wstring dir(g_exeDir);
-    SetEnvironmentVariableW(L"GST_PLUGIN_PATH",        (dir + L"gst-plugins").c_str());
-    SetEnvironmentVariableW(L"GST_PLUGIN_SCANNER",     (dir + L"gst-plugin-scanner.exe").c_str());
-    SetEnvironmentVariableW(L"GST_REGISTRY",           (dir + L"gstreamer-registry.bin").c_str());
+    SetEnvironmentVariableW(L"GST_PLUGIN_PATH",        (g_exeDir + L"gst-plugins").c_str());
+    SetEnvironmentVariableW(L"GST_PLUGIN_SCANNER",     (g_exeDir + L"gst-plugin-scanner.exe").c_str());
+    SetEnvironmentVariableW(L"GST_REGISTRY",           (g_exeDir + L"gstreamer-registry.bin").c_str());
     SetEnvironmentVariableW(L"GST_PLUGIN_SYSTEM_PATH", L"");
-    wchar_t existingPath[32768] = {};
-    GetEnvironmentVariableW(L"PATH", existingPath, 32767);
-    SetEnvironmentVariableW(L"PATH", (dir + L";" + existingPath).c_str());
+    SetEnvironmentVariableW(L"UXPLAY_GUI_STATUS",      L"1");   // machine-readable session events
+    {
+        std::vector<wchar_t> path(32768);
+        DWORD n = GetEnvironmentVariableW(L"PATH", path.data(), (DWORD)path.size());
+        std::wstring p = g_exeDir + L";" + std::wstring(path.data(), n < path.size() ? n : 0);
+        SetEnvironmentVariableW(L"PATH", p.c_str());
+    }
 
-    std::string iniDir(g_exeDir, g_exeDir + wcslen(g_exeDir));
-    std::string iniPath = iniDir + "uxplay-settings.ini";
+    LoadSettingsFile();
+    {
+        std::string text;
+        if (ReadFileUtf8(PrefsPath(), &text)) g_prefs = ParsePrefs(text);   // invalid values fall back to defaults
+    }
+    g_ui.savedSnapshot   = SerializeSettings(g_settings);
+    g_ui.page            = g_prefs.page;
+    g_ui.consoleVisible  = g_prefs.showConsoleOnStartup;   // hidden unless the user opted in
+    g_ui.systemDark      = ReadSystemDark();
+    g_ui.reduceMotion    = ReadReduceMotion();
+    g_ui.launcherVersion = UXPLAY_LAUNCHER_VERSION;
+    {
+        char pc[MAX_COMPUTERNAME_LENGTH + 1] = "";
+        DWORD n = sizeof(pc);
+        if (GetComputerNameA(pc, &n)) g_ui.computerName = pc;   // same call uxplay.exe uses
+    }
 
-    Settings settings;
-    LoadSettings(settings, iniPath);
+    LoadAppIcons(hInst);
 
-    // Register window classes
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
     wc.style = CS_CLASSDC;
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hIcon = g_iconBig;
+    wc.hIconSm = g_iconSmall;
+    wc.hbrBackground = CreateSolidBrush(RGB(0x0C, 0x0D, 0x10));  // no white flash before first frame
     wc.lpszClassName = L"UxPlayGUI";
     RegisterClassExW(&wc);
+
+    WNDCLASSEXW wcMenu = {};
+    wcMenu.cbSize = sizeof(wcMenu);
+    wcMenu.lpfnWndProc = MenuOwnerProc;
+    wcMenu.hInstance = hInst;
+    wcMenu.lpszClassName = L"UxPlayMenuOwner";
+    RegisterClassExW(&wcMenu);
+    // Invisible owner for the player right-click menu, so showing it never
+    // brings the launcher window to the front.
+    g_menuOwner = CreateWindowExW(WS_EX_TOOLWINDOW, L"UxPlayMenuOwner", L"", WS_POPUP, 0, 0, 0, 0,
+                                  NULL, NULL, hInst, NULL);
 
     WNDCLASSEXW wcOv = {};
     wcOv.cbSize = sizeof(wcOv);
@@ -515,37 +1364,53 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     wcOv.lpszClassName = L"UxPlayRotOverlay";
     RegisterClassExW(&wcOv);
 
-    // Size the window to fit all UI elements without scrolling.
-    // Compute required client area then adjust for non-client chrome.
-    const int kClientW = 500, kClientH = 660;
-    RECT rc = {0, 0, kClientW, kClientH};
-    AdjustWindowRect(&rc, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
-    HWND hwnd = CreateWindowW(L"UxPlayGUI", L"UxPlay Launcher",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT,
-        rc.right - rc.left, rc.bottom - rc.top,
-        NULL, NULL, hInst, NULL);
+    // Per-monitor DPI awareness; the UI scales itself and rebuilds fonts on DPI change.
+    ImGui_ImplWin32_EnableDpiAwareness();
+
+    HWND hwnd = CreateWindowExW(0, L"UxPlayGUI", L"UxPlay", WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, 900, 660, NULL, NULL, hInst, NULL);
+    g_hwnd = hwnd;
+    UINT dpi = GetDpiForWindow(hwnd);
+    g_dpiScale = dpi ? dpi / 96.0f : 1.0f;
+    RestorePlacement(hwnd, (int)(920 * g_dpiScale), (int)(680 * g_dpiScale));
+    // The restored rectangle may sit on a monitor with a different DPI.
+    dpi = GetDpiForWindow(hwnd);
+    if (dpi) g_dpiScale = dpi / 96.0f;
+    g_ui.scale = g_dpiScale;
 
     if (!CreateDeviceD3D(hwnd)) {
+        g_log.Write("ERROR", "app", "Direct3D 11 is not available; cannot show the launcher window");
+        MessageBoxW(hwnd, L"UxPlay could not start its window because Direct3D 11 is not available.\n\n"
+                          L"Update your graphics driver and try again.", L"UxPlay", MB_ICONERROR | MB_OK);
         CleanupDeviceD3D();
+        DestroyWindow(hwnd);
         UnregisterClassW(wc.lpszClassName, hInst);
         return 1;
     }
-
-    ShowWindow(hwnd, SW_SHOWDEFAULT);
-    UpdateWindow(hwnd);
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = NULL;
+    io.LogFilename = NULL;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    ImGui::StyleColorsDark();
+    UiFonts fonts = BuildFonts(g_dpiScale);
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
-    ImVec4 clearColor = ImVec4(0.12f, 0.12f, 0.12f, 1.0f);
+    const UiHost host = {
+        IsUxPlayRunning, HostStart, HostStop, HostSave, HostGetRotation, HostSetRotation,
+        HostOpenLogFile, HostOpenLogFolder, HostOpenSettingsFolder, HostOpenDocs, HostExit,
+        HostThemeApplied, HostLogStatus,
+        HostFolderPath, HostFolderIsDefault, HostChooseFolder, HostResetFolder,
+    };
+
+    ShowWindow(hwnd, g_prefs.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL);
+    UpdateWindow(hwnd);
+
+    Phase  loggedPhase[kMaxReceivers] = {};
+    double lastBrand = 0.0;
     bool done = false;
 
     while (!done) {
@@ -557,142 +1422,85 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         }
         if (done) break;
 
+        // While hidden in the tray there is nothing to draw; keep the process
+        // and pipe monitored at a relaxed pace instead of spinning.
+        if (g_inTray || IsIconic(hwnd)) {
+            g_now = ImGui::GetTime();
+            PollProcess();
+            UpdateReceiverPool(g_settings);
+            UpdateMouseHook();
+            ManagePlayerWindows();
+            if (g_inTray) {
+                std::wstring tip = IsUxPlayRunning() ? L"UxPlay \x2014 " + Wide(PhaseLabel(g_sessions[0].phase)) : L"UxPlay";
+                if (tip != g_nid.szTip) {
+                    wcsncpy_s(g_nid.szTip, tip.c_str(), _TRUNCATE);
+                    g_nid.uFlags = NIF_TIP;
+                    Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+                }
+            }
+            MsgWaitForMultipleObjects(0, NULL, FALSE, 100, QS_ALLINPUT);
+            continue;
+        }
+
+        if (g_dpiChanged) {
+            g_dpiChanged = false;
+            g_ui.scale = g_dpiScale;
+            fonts = BuildFonts(g_dpiScale);
+            ImGui_ImplDX11_InvalidateDeviceObjects();   // font atlas is rebuilt on the next NewFrame
+            g_ui.appliedTheme = -1;                    // re-apply style sizes at the new scale
+        }
+
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
+        g_now = ImGui::GetTime();
 
-        // Fixed window filling the entire client area — no scroll bar
-        ImGui::SetNextWindowPos(ImVec2(0, 0));
-        ImGui::SetNextWindowSize(io.DisplaySize);
-        ImGui::Begin("##main", NULL,
-            ImGuiWindowFlags_NoTitleBar    | ImGuiWindowFlags_NoResize  |
-            ImGuiWindowFlags_NoMove        | ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar |
-            ImGuiWindowFlags_NoScrollWithMouse);
-
-        // ── Basic ──────────────────────────────────────────────────────────
-        ImGui::SeparatorText("Basic");
-
-        ImGui::SetNextItemWidth(250);
-        ImGui::InputText("Server name", settings.serverName, sizeof(settings.serverName));
-        ImGui::SameLine(); ImGui::TextDisabled("(empty = hostname)");
-
-        ImGui::SetNextItemWidth(100);
-        ImGui::InputInt("Port", &settings.port, 0);
-        if (settings.port < 1) settings.port = 1;
-        if (settings.port > 65535) settings.port = 65535;
-
-        ImGui::Checkbox("Fullscreen on start (-fs)", &settings.fullscreen);
-
-        ImGui::SetNextItemWidth(120);
-        ImGui::InputText("Window size (WxH)", settings.windowSize, sizeof(settings.windowSize));
-
-        ImGui::Checkbox("Require PIN (-pin)", &settings.pin);
-
-        ImGui::SetNextItemWidth(200);
-        ImGui::InputText("Password (-pw)", settings.password, sizeof(settings.password),
-                         ImGuiInputTextFlags_Password);
-
-        // ── Video ──────────────────────────────────────────────────────────
-        ImGui::SeparatorText("Video");
-
-        ImGui::SetNextItemWidth(220);
-        ComboOptions("Video sink", &settings.videoSinkIdx,
-                     kVideoSinks, (int)(sizeof(kVideoSinks) / sizeof(*kVideoSinks)));
-
-        ImGui::SetNextItemWidth(220);
-        ComboOptions("Video decoder", &settings.videoDecoderIdx,
-                     kVideoDecoders, (int)(sizeof(kVideoDecoders) / sizeof(*kVideoDecoders)));
-
-        ImGui::Checkbox("H.265 / 4K support (-h265)", &settings.h265);
-
-        ImGui::SetNextItemWidth(220);
-        ImGui::SliderInt("FPS (-fps)", &settings.fps, 0, 256,
-                         settings.fps == 0 ? "Default" : "%d fps");
-
-        // Rotate only the uxplay player window via a GDI overlay
-        {
-            static const char* kRotLabels[] = {"0\xc2\xb0", "90\xc2\xb0 CW", "180\xc2\xb0", "270\xc2\xb0 CW"};
-            bool uxRunning = IsUxPlayRunning();
-            ImGui::BeginDisabled(!uxRunning);
-            if (ImGui::Button("Rotate window 90\xc2\xb0 CW"))
-                SetOverlayRotation((g_overlayRot + 1) % 4);
-            ImGui::SameLine();
-            if (g_overlayRot != 0 && ImGui::Button("Reset rotation"))
-                SetOverlayRotation(0);
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            ImGui::TextDisabled("Current: %s%s", kRotLabels[g_overlayRot],
-                                uxRunning ? "" : "  (launch first)");
+        PollProcess();
+        for (int i = 0; i < kMaxReceivers; ++i) {
+            const Session& se = g_sessions[i];
+            if (se.phase == loggedPhase[i]) continue;
+            loggedPhase[i] = se.phase;
+            std::string what = std::string("State: ") + PhaseLabel(se.phase);
+            if (!se.deviceName.empty() && (se.phase == Phase::Connecting || se.phase == Phase::Connected))
+                what += " (" + se.deviceName + ")";
+            if (se.phase == Phase::Error) what += " - " + se.error.title;
+            g_log.Write(se.phase == Phase::Error ? "WARN" : "INFO", RxTag(i).c_str(), what);
         }
+        UpdateReceiverPool(g_settings);
+        UpdateMouseHook();
+        if (g_now - lastBrand > 0.1) { lastBrand = g_now; ManagePlayerWindows(); }
 
-        // ── Audio ──────────────────────────────────────────────────────────
-        ImGui::SeparatorText("Audio");
+        DrawLauncherUI(g_settings, g_ui, g_sessions, g_rxCount, g_prefs, host, fonts);   // sessions of the current/last run
 
-        ImGui::SetNextItemWidth(220);
-        ComboOptions("Audio sink", &settings.audioSinkIdx,
-                     kAudioSinks, (int)(sizeof(kAudioSinks) / sizeof(*kAudioSinks)));
+        if (g_ui.prefsDirty) { g_ui.prefsDirty = false; MarkPrefsDirty(); }
+        // Debounced: geometry and preference changes are written at most once a second.
+        if (g_prefsDirty && g_now - g_prefsDirtyAt > 1.0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) SavePrefs(true);
 
-        ImGui::SetNextItemWidth(220);
-        ImGui::SliderFloat("Volume (-vol)", &settings.volume, 0.0f, 1.0f, "%.2f");
-
-        // ── Advanced ────────────────────────────────────────────────────────
-        ImGui::SeparatorText("Advanced");
-
-        ImGui::Checkbox("No freeze on disconnect (-nofreeze)", &settings.noFreeze);
-        ImGui::Checkbox("Debug logging (-d)", &settings.debug);
-
-        ImGui::SetNextItemWidth(-1.0f);
-        ImGui::InputText("Extra arguments", settings.extraArgs, sizeof(settings.extraArgs));
-
-        // ── Command preview ─────────────────────────────────────────────────
-        ImGui::SeparatorText("Command");
-        std::string preview = "uxplay.exe";
-        std::string args = BuildArgs(settings);
-        if (!args.empty()) { preview += " "; preview += args; }
-        ImGui::TextWrapped("%s", preview.c_str());
-
-        // ── Buttons ─────────────────────────────────────────────────────────
-        ImGui::Separator();
-        float btnW = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-
-        bool running = IsUxPlayRunning();
-        if (!running) {
-            if (ImGui::Button("Launch UxPlay", ImVec2(btnW, 36)))
-                LaunchUxPlay(settings);
-        } else {
-            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.1f, 0.1f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.9f, 0.2f, 0.2f, 1.0f));
-            if (ImGui::Button("Stop UxPlay", ImVec2(btnW, 36)))
-                StopUxPlay();
-            ImGui::PopStyleColor(3);
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Save Settings", ImVec2(btnW, 36)))
-            SaveSettings(settings, iniPath);
-
-        ImGui::End();
-
-        // Render
         ImGui::Render();
-        const float cc[4] = { clearColor.x, clearColor.y, clearColor.z, clearColor.w };
+        ImVec4 c = UiClearColor();
+        const float cc[4] = { c.x, c.y, c.z, 1.0f };
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, cc);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
         g_pSwapChain->Present(1, 0);
     }
 
-    // Cleanup
-    SetOverlayRotation(0);  // destroy overlay window + timer
+    // Shutdown: persist, stop the receiver (as before), release everything.
+    SavePrefs(false);   // geometry was captured in WM_DESTROY
+    SetOverlayRotation(0);
     StopUxPlay();
-    Shell_NotifyIconW(NIM_DELETE, &g_nid);
+    if (g_mouseHook) { UnhookWindowsHookEx(g_mouseHook); g_mouseHook = NULL; }
+    if (g_menuOwner) DestroyWindow(g_menuOwner);
+    g_log.Write("INFO", "app", "Launcher exiting");
+    g_log.Close();
+    if (g_inTray) Shell_NotifyIconW(NIM_DELETE, &g_nid);
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
     CleanupDeviceD3D();
-    DestroyWindow(hwnd);
+    if (IsWindow(hwnd)) DestroyWindow(hwnd);
     UnregisterClassW(wc.lpszClassName, hInst);
     UnregisterClassW(wcOv.lpszClassName, hInst);
+    if (single) CloseHandle(single);
     return 0;
 }

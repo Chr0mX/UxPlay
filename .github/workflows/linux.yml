@@ -41,6 +41,11 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
+      - name: Launcher unit tests (platform-free session/prefs logic)
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Igui gui/tests/launcher_tests.cpp gui/session.cpp gui/prefs.cpp -o launcher-tests
+          ./launcher-tests
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:

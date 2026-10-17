@@ -1,0 +1,3 @@
+// Icon for uxplay.exe (Explorer, and the taskbar entry of the player window).
+#include "resource.h"
+IDI_UXPLAY ICON "uxplay.ico"

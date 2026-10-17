@@ -251,6 +251,27 @@ static void log(int level, const char* format, ...) {
     va_end(vargs);
 }
 
+/* Machine-readable session events for the Windows GUI launcher (gui/).
+ * Enabled only when the environment variable UXPLAY_GUI_STATUS is set, so the
+ * normal command-line output is unchanged. One event per line on stdout:
+ *   @uxplay-status <event> [key=value ...] [name=<rest of line>]
+ * stdout is unbuffered in this mode because the launcher reads it through a
+ * pipe and must see events (and log lines) as they happen. */
+static bool gui_status = false;
+static bool gui_audio_reported = false;   /* "stream-start" sent once per session */
+static bool gui_video_reported = false;
+
+static void gui_status_event(const char *format, ...) {
+    if (!gui_status) return;
+    va_list vargs;
+    printf("@uxplay-status ");
+    va_start(vargs, format);
+    vprintf(format, vargs);
+    va_end(vargs);
+    printf("\n");
+    fflush(stdout);
+}
+
 #define LOGD(...) log(LOGGER_DEBUG, __VA_ARGS__)
 #define LOGI(...) log(LOGGER_INFO, __VA_ARGS__)
 #define LOGW(...) log(LOGGER_WARNING, __VA_ARGS__)
@@ -2228,6 +2249,7 @@ extern "C" void export_dacp(void *cls, const char *active_remote, const char *da
 extern "C" void conn_init (void *cls) {
     open_connections++;
     LOGD("Open connections: %i", open_connections);
+    gui_status_event("connection-open count=%u", open_connections);
     //video_renderer_update_background(1);
 }
 
@@ -2235,7 +2257,9 @@ extern "C" void conn_destroy (void *cls) {
     //video_renderer_update_background(-1);
     open_connections--;
     LOGD("Open connections: %i", open_connections);
+    gui_status_event("connection-closed count=%u", open_connections);
     if (open_connections == 0) {
+        gui_audio_reported = gui_video_reported = false;
         remote_clock_offset = 0;
         if (use_audio) {
             audio_renderer_stop();
@@ -2269,6 +2293,8 @@ extern "C" void conn_reset (void *cls, int reason) {
     if (!nofreeze) {
         close_window = false;    /* leave "frozen" window open */
     }
+    gui_status_event("connection-reset reason=%d", reason);
+    gui_audio_reported = gui_video_reported = false;
     reset_httpd = true;
     relaunch_video = true;
     reset_loop = true;
@@ -2289,6 +2315,8 @@ extern "C" void report_client_request(void *cls, char *deviceid, char * model, c
         *admit = false;
         LOGI("*** attempt to connect by blocked client (clientID %s): DENIED\n", deviceid);
     }
+    gui_status_event("client-request admit=%d deviceid=%s model=%s name=%s",
+                     *admit ? 1 : 0, deviceid, model, name);
     // Pass device model to renderer for device frame display
     if (*admit && use_video) {
         video_renderer_set_device_model(model, name);
@@ -2296,6 +2324,10 @@ extern "C" void report_client_request(void *cls, char *deviceid, char * model, c
 }
 
 extern "C" void audio_process (void *cls, raop_ntp_t *ntp, audio_decode_struct *data) {
+    if (gui_status && !gui_audio_reported) {
+        gui_audio_reported = true;
+        gui_status_event("stream-start kind=audio");
+    }
     if (dump_audio) {
         dump_audio_to_file(data->data, data->data_len, (data->data)[0] & 0xf0);
     }
@@ -2331,6 +2363,10 @@ extern "C" void audio_process (void *cls, raop_ntp_t *ntp, audio_decode_struct *
 }
 
 extern "C" void video_process (void *cls, raop_ntp_t *ntp, video_decode_struct *data) {
+    if (gui_status && !gui_video_reported) {
+        gui_video_reported = true;
+        gui_status_event("stream-start kind=video");
+    }
     if (dump_video) {
         dump_video_to_file(data->data, data->data_len);
     }
@@ -2491,6 +2527,8 @@ extern "C" void video_report_size(void *cls, float *width_source, float *height_
     if (use_video) {
         video_renderer_size(width_source, height_source, width, height);
     }
+    /* stream frame size (changes when the device rotates): lets the GUI fit the player window */
+    gui_status_event("video-size w=%u h=%u", (unsigned int) *width, (unsigned int) *height);
 }
 
 extern "C" void audio_set_coverart(void *cls, const void *buffer, int buflen) {
@@ -2893,6 +2931,10 @@ int main (int argc, char *argv[]) {
     std::vector<char> server_hw_addr;
     std::string config_file = "";
 
+    if (getenv("UXPLAY_GUI_STATUS")) {
+        gui_status = true;
+        setvbuf(stdout, NULL, _IONBF, 0);
+    }
 #ifdef _WIN32
     if (!SetConsoleCtrlHandler(CtrlHandler, TRUE)) {
         LOGE("Could not set control handler");
@@ -3211,6 +3253,7 @@ int main (int argc, char *argv[]) {
         cleanup();
     }
     if (start_raop_server(display, tcp, udp, debug_log)) {
+        gui_status_event("error kind=raop");
         stop_dnssd();
         cleanup();
     }
@@ -3234,9 +3277,12 @@ int main (int argc, char *argv[]) {
     }
     
     if (register_dnssd()) {
+        gui_status_event("error kind=dnssd");
         stop_raop_server();
         stop_dnssd();
         cleanup();
+    } else {
+        gui_status_event("ready port=%u", (unsigned int) raop_get_port(raop));
     }
     reconnect:
     compression_type = 0;

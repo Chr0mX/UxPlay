@@ -225,62 +225,51 @@ if [ -d "${BEACON_DIR}" ]; then
 fi
 
 # ── Write user README ─────────────────────────────────────────────────────────
-cat > "${DIST_DIR}/README-Windows.txt" << READMEEOF
-UxPlay ${VERSION} — Portable Windows Release
-=============================================
+cat > "${DIST_DIR}/README.md" << READMEEOF
+# UxPlay ${VERSION} for Windows
 
-QUICK START
------------
-1. Install Apple Bonjour for Windows if not already installed:
-   - Bonjour is bundled with iTunes, iCloud for Windows, and Apple TV.
-   - Standalone: https://support.apple.com/downloads/Bonjour
+UxPlay turns your PC into an AirPlay receiver: mirror an iPhone, iPad or Mac screen to Windows.
 
-2. Run uxplay.bat (recommended) or uxplay.exe directly.
-   Windows will ask for firewall permission on first launch — click Allow.
+## Quick start
 
-3. On your iPhone/iPad, open Control Center, tap Screen Mirroring,
-   and select the device name shown in the UxPlay window.
+1. Install **Apple Bonjour** if it is not already installed. It comes with iTunes, iCloud for
+   Windows and the Apple TV app, or as the standalone *Bonjour Print Services for Windows*.
+2. Open **UxPlay** (\`uxplay-gui.exe\`) and press **Start**. Allow it through Windows Firewall if asked.
+3. On your iPhone or iPad, open **Control Center → Screen Mirroring** and pick the name UxPlay shows.
 
-HARDWARE DECODING (Recommended for smooth video)
--------------------------------------------------
-Intel / AMD (DXVA2 / D3D11VA):
-  uxplay.bat -vd d3d11videodec -vs d3d11videosink
+## The UxPlay window
 
-NVIDIA (NVDEC):
-  uxplay.bat -vd nvh264dec -vs d3d11videosink
+- **Status** at the top shows whether a device is connected, which one, and for how long.
+- **Phones at once** (Connection page): while a phone is mirroring, another receiver
+  ("*name* 2", ...) appears for the next phone, each in its own window.
+- **Player window:** right-click it to rotate the picture or fit the window to the video.
+  It keeps the video's shape when you resize it.
+- **Console** (View → Show Console, Ctrl+\`) shows the receiver's output; it is hidden by default.
+- **Storage** (Advanced page): choose where settings and logs are saved.
+- Minimizing keeps the receiver running in the notification area; closing the window quits UxPlay.
 
-D3D12 sink with Alt+Enter fullscreen toggle:
-  uxplay.bat -vs d3d12videosink
+## Command line
 
-SOFTWARE DECODING (fallback, no GPU requirement):
-  uxplay.bat -vd avdec_h264 -vs d3d11videosink
+\`uxplay.bat\` runs the receiver directly with options, for example:
 
-USEFUL OPTIONS
---------------
-  -n <name>        Set AirPlay receiver name (default: hostname)
-  -fs              Start in fullscreen
-  -s WxH           Set window size (e.g. -s 1920x1080)
-  -p <port>        Set AirPlay port (default: 7100)
-  -vs <sink>       Video sink: d3d11videosink, d3d12videosink, autovideosink
-  -as <sink>       Audio sink: directsoundsink, wasapisink, autoaudiosink
-  -vd <decoder>    Video decoder: d3d11videodec, nvh264dec, avdec_h264
-  -v               Verbose logging
+| Option | Meaning |
+|---|---|
+| \`-n <name>\` | AirPlay receiver name |
+| \`-fs\` | Start fullscreen |
+| \`-s WxH\` | Window size, e.g. \`-s 1920x1080\` |
+| \`-p <port>\` | Base network port (default 7100) |
+| \`-vs <sink>\` | Video sink: d3d11videosink, d3d12videosink, autovideosink |
+| \`-vd <decoder>\` | Video decoder: d3d11videodec, nvh264dec, avdec_h264 |
+| \`-as <sink>\` | Audio sink: directsoundsink, wasapisink, autoaudiosink |
 
-REQUIREMENTS
-------------
-- Windows 10 or 11 (64-bit)
-- Apple Bonjour service (mDNSResponder) — see QUICK START above
-- Network: device and iPhone/iPad on the same Wi-Fi network
+## Troubleshooting
 
-TROUBLESHOOTING
----------------
-- Not visible in AirPlay list: check Windows Firewall, ensure Bonjour
-  service is running (services.msc → "Bonjour Service")
-- Black screen / no video: try software decode (-vd avdec_h264)
-- Audio issues: try -as wasapisink or -as directsoundsink
-- Crashes with d3d12videosink + old Nvidia: add -vs d3d11videosink instead
+- **Not in the AirPlay list:** make sure the *Bonjour Service* is running (services.msc), that
+  Windows Firewall allows UxPlay, and that the PC and phone are on the same network.
+- **Black screen / no video:** set the video decoder to *Software (FFmpeg)* on the Display page.
+- **Audio problems:** try a different audio sink on the Audio page.
 
-For full documentation, see docs/WINDOWS.md or the project README.
+Requires Windows 10 or 11 (64-bit). Full documentation: docs/WINDOWS.md and the project README.
 READMEEOF
 
 # ── Zip the portable folder (also the tree NSIS packages into the installer) ──

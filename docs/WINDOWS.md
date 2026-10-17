@@ -222,6 +222,35 @@ bash scripts/package-windows.sh
 
 This produces `uxplay-windows-<version>.zip` with all required DLLs bundled.
 
+## GUI launcher (uxplay-gui.exe)
+
+The **UxPlay** shortcut opens `uxplay-gui.exe`, which configures and runs `uxplay.exe` for you.
+
+- **No console window.** The receiver runs without a console. Its output goes to the in-app
+  console (**View → Show Console**, `Ctrl+``) and to a log file. Hiding the console never stops the receiver.
+  **View → Show Console on Startup** opens it automatically (off by default).
+- **Connection status** at the top of the window shows *Receiver off*, *Starting*, *Disconnected*
+  (waiting for devices), *Connecting*, *Connected* (device, address, stream type, duration) or *Error*.
+  States come from events that `uxplay.exe` prints when the launcher sets `UXPLAY_GUI_STATUS=1`.
+- **Errors** (Bonjour missing, port in use, missing GStreamer plugin, invalid option, unexpected exit)
+  are explained with a next step, a **Try again** button and the technical details.
+- **Shortcuts:** `F5` start, `Shift+F5` stop, `Ctrl+Shift+F5` restart, `Ctrl+S` save, `Ctrl+1`–`Ctrl+4` pages,
+  `Ctrl+L` open log, `F1` documentation, `Ctrl+Q` exit.
+- **Multiple phones:** *Connection → Phones at once* (1–4) is a maximum. While every running receiver is in use,
+  the next one ("UxPlay@PC 2", ...) starts automatically on base port + 10 each; extra idle receivers close again.
+- **Player window:** sized to the video's aspect ratio (refits when the phone rotates; keeps the shape when you resize).
+  Right-click it to rotate, reset rotation or fit it to the video.
+- **Storage:** *Advanced → Storage* (and the installer) choose the settings and logs folders.
+- **Closing** the window quits and stops every receiver (each runs in a kill-on-close job, so nothing is left
+  behind even if the launcher crashes). **Minimizing** while running keeps it in the notification area.
+  Only one launcher runs at a time.
+
+| What | Where |
+|---|---|
+| Receiver settings | `%APPDATA%\UxPlay\uxplay-settings.ini` (imported once from the install folder if an older launcher saved it there) |
+| Window size/position, theme, console preference | `%APPDATA%\UxPlay\launcher-prefs.ini` |
+| Diagnostic log (receiver output + launcher events, 2 MB rotation, password never logged) | `%LOCALAPPDATA%\UxPlay\logs\uxplay.log` |
+
 ---
 
 ## Troubleshooting
