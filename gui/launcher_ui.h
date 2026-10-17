@@ -89,6 +89,7 @@ struct UiState {
     int         seenErrorSerial = 0;
     float       scale          = 1.0f;
     std::string launcherVersion = "dev";
+    std::string computerName;            // host: this PC's name (uxplay's default is "UxPlay@<name>")
 };
 
 // Loads fonts at the given DPI scale. Missing files fall back to ImGui's default.

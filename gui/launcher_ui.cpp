@@ -733,12 +733,21 @@ static const Page kPages[] = {
 };
 static const int kPageCount = (int)(sizeof(kPages) / sizeof(*kPages));
 
-static void PageConnection(Settings& s)
+// Name uxplay.exe advertises when no -n is given (see append_hostname in uxplay.cpp).
+static std::string DefaultServerName(const UiState& ui)
+{
+    return ui.computerName.empty() ? std::string("UxPlay") : "UxPlay@" + ui.computerName;
+}
+
+static void PageConnection(Settings& s, const UiState& ui)
 {
     SectionHeader("Network", "How Apple devices find and reach this receiver.");
     BeginCard();
-    BeginRow("Server name", "Name shown in the AirPlay menu on iPhone, iPad and Mac.", "-n");
-    ImGui::InputTextWithHint("##v", "Use this PC's hostname", s.serverName, sizeof(s.serverName));
+    std::string def = DefaultServerName(ui);
+    std::string desc = "Name shown in the AirPlay menu on iPhone, iPad and Mac. Leave empty to use \"" + def + "\".";
+    BeginRow("Server name", desc.c_str(), "-n");
+    ImGui::InputTextWithHint("##v", def.c_str(), s.serverName, sizeof(s.serverName));
+    if (!ui.computerName.empty()) ImGui::SetItemTooltip("This PC's name: %s", ui.computerName.c_str());
     EndRow();
     BeginRow("Port", "Base TCP port for AirPlay. Change only if 7100 is taken.", "-p", 120);
     ImGui::InputInt("##v", &s.port, 0);
@@ -910,9 +919,9 @@ static void DrawStateGlyph(ImDrawList* dl, const Session& ses, ImVec2 c, float r
     }
 }
 
-static std::string StatusDetail(const Session& ses, const Settings& s, double now)
+static std::string StatusDetail(const Session& ses, const Settings& s, const UiState& ui, double now)
 {
-    std::string name = s.serverName[0] ? s.serverName : "this PC's hostname";
+    std::string name = s.serverName[0] ? std::string(s.serverName) : DefaultServerName(ui);
     std::string dev = ses.deviceName.empty() ? std::string("A device") : ses.deviceName;
     char port[32] = "";
     if (ses.port) snprintf(port, sizeof(port), "  \xc2\xb7  port %u", ses.port);
@@ -1075,7 +1084,7 @@ static void StatusStrip(const Settings& s, UiState& ui, Session& ses, const UiHo
     float ty = cy - (lh + sh + Px(3)) * 0.5f;
     dl->AddText(g_fonts.strong, lh, ImVec2(tx, ty),
                 Col(ses.phase == Phase::Off ? P->TextMuted : P->Text, 0.4f + 0.6f * t), look.label);
-    std::string full = StatusDetail(ses, s, now);
+    std::string full = StatusDetail(ses, s, ui, now);
     std::string detail = Ellipsize(g_fonts.small, full, ImMax(Px(40), maxW));
     dl->AddText(g_fonts.small, sh, ImVec2(tx, ty + lh + Px(3)), Col(P->TextMuted, 0.4f + 0.6f * t), detail.c_str());
     ImGui::SetCursorScreenPos(ImVec2(tx, ty));
@@ -1584,7 +1593,7 @@ void DrawLauncherUI(Settings& s, UiState& ui, Session& ses, UiPrefs& prefs, cons
         ImGui::Dummy(ImVec2(0, Px(2)));
 
         switch (ui.page) {
-        case 0: PageConnection(s);                  break;
+        case 0: PageConnection(s, ui);              break;
         case 1: PageDisplay(s, host);               break;
         case 2: PageAudio(s);                       break;
         case 3: PageAdvanced(s, ui, prefs, cmd);    break;

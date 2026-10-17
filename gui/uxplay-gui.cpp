@@ -920,6 +920,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     g_ui.systemDark      = ReadSystemDark();
     g_ui.reduceMotion    = ReadReduceMotion();
     g_ui.launcherVersion = UXPLAY_LAUNCHER_VERSION;
+    {
+        char pc[MAX_COMPUTERNAME_LENGTH + 1] = "";
+        DWORD n = sizeof(pc);
+        if (GetComputerNameA(pc, &n)) g_ui.computerName = pc;   // same call uxplay.exe uses
+    }
 
     LoadAppIcons(hInst);
 
