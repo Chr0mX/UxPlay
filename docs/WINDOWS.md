@@ -236,6 +236,8 @@ The **UxPlay** shortcut opens `uxplay-gui.exe`, which configures and runs `uxpla
   are explained with a next step, a **Try again** button and the technical details.
 - **Shortcuts:** `F5` start, `Shift+F5` stop, `Ctrl+Shift+F5` restart, `Ctrl+S` save, `Ctrl+1`–`Ctrl+4` pages,
   `Ctrl+R` rotate player, `Ctrl+L` open log, `F1` documentation, `Ctrl+Q` exit.
+- **Multiple phones:** *Connection → Phones at once* (1–4) starts one receiver per phone, each with its own
+  AirPlay name ("UxPlay@PC", "UxPlay@PC 2", ...), ports (base port + 10 each) and window. Player rotation applies to receiver 1.
 - **Closing or minimizing** the window while the receiver runs keeps it running in the notification area;
   use **File → Exit** or the tray menu to quit. Only one launcher runs at a time.
 

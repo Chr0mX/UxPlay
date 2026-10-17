@@ -27,7 +27,10 @@ struct Settings {
     bool  noFreeze        = false;
     bool  debug           = false;
     char  extraArgs[256]  = "";
+    int   receivers       = 1;  // phones mirroring side by side (one uxplay.exe each)
 };
+
+static const int kMaxReceivers = 4;
 
 struct Option { const char* label; const char* flag; };
 
@@ -39,7 +42,13 @@ extern const int    kVideoDecoderCount;
 extern const int    kAudioSinkCount;
 
 // redact=true replaces the password with *** (for display and logs).
-std::string BuildArgs(const Settings& s, bool redact = false);
+// index > 0 builds the arguments for an additional side-by-side receiver: its own
+// name ("<name> 2"), ports (base + 10 per receiver) and a fixed device ID (-m), so
+// several uxplay.exe instances can run at once. defaultName is the name uxplay
+// advertises when none is set ("UxPlay@<PC name>").
+std::string BuildArgs(const Settings& s, bool redact = false, int index = 0,
+                      const std::string& defaultName = "UxPlay");
+std::string ReceiverName(const Settings& s, int index, const std::string& defaultName);
 std::string SerializeSettings(const Settings& s);                 // INI text
 void        ParseSettings(Settings& s, const std::string& text);  // INI text
 
@@ -87,6 +96,7 @@ struct UiState {
     bool        reduceMotion   = false;   // host: OS animation preference
     int         appliedTheme   = -1;      // -1 none, 0 light, 1 dark
     int         seenErrorSerial = 0;
+    int         consoleReceiver = 0;      // which receiver's output the console shows
     float       scale          = 1.0f;
     std::string launcherVersion = "dev";
     std::string computerName;            // host: this PC's name (uxplay's default is "UxPlay@<name>")
@@ -95,7 +105,8 @@ struct UiState {
 // Loads fonts at the given DPI scale. Missing files fall back to ImGui's default.
 UiFonts LoadUiFonts(float scale, const char* regularTtf, const char* boldTtf, const char* monoTtf);
 void    ApplyUiTheme(float scale, bool dark);
-void    DrawLauncherUI(Settings& s, UiState& ui, Session& session, UiPrefs& prefs,
+// sessions[0..count-1]: one per running/configured receiver (count >= 1).
+void    DrawLauncherUI(Settings& s, UiState& ui, Session* sessions, int count, UiPrefs& prefs,
                        const UiHost& host, const UiFonts& fonts);
 
 // Background color the host should clear to (matches the current theme).

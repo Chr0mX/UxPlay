@@ -39,15 +39,30 @@ const int kVideoDecoderCount = (int)(sizeof(kVideoDecoders) / sizeof(*kVideoDeco
 const int kAudioSinkCount    = (int)(sizeof(kAudioSinks)    / sizeof(*kAudioSinks));
 static const int kAudioDisabledIdx = 4;
 
-std::string BuildArgs(const Settings& s, bool redact)
+std::string ReceiverName(const Settings& s, int index, const std::string& defaultName)
+{
+    std::string base = s.serverName[0] ? std::string(s.serverName) : defaultName;
+    return index == 0 ? base : base + " " + std::to_string(index + 1);
+}
+
+std::string BuildArgs(const Settings& s, bool redact, int index, const std::string& defaultName)
 {
     std::string args;
     auto append = [&](const std::string& tok) {
         if (!tok.empty()) { if (!args.empty()) args += ' '; args += tok; }
     };
 
-    if (s.serverName[0]) { append("-n"); append(std::string("\"") + s.serverName + "\""); }
-    if (s.port != 7100)  { append("-p"); append(std::to_string(s.port)); }
+    if (index == 0) {   // unchanged single-receiver arguments
+        if (s.serverName[0]) { append("-n"); append(std::string("\"") + s.serverName + "\""); }
+        if (s.port != 7100)  { append("-p"); append(std::to_string(s.port)); }
+    } else {
+        // Each extra receiver needs its own name, ports (uxplay uses n..n+2) and
+        // device ID. The ID is fixed per slot so phones keep recognising it.
+        append("-n"); append("\"" + ReceiverName(s, index, defaultName) + "\"");
+        append("-p"); append(std::to_string(s.port + 10 * index));
+        char mac[32]; snprintf(mac, sizeof(mac), "02:55:58:50:4c:%02x", index);
+        append("-m"); append(mac);
+    }
     if (s.fullscreen)    append("-fs");
     if (s.windowSize[0] && std::string(s.windowSize) != "1920x1080") {
         append("-s"); append(s.windowSize);
@@ -89,6 +104,7 @@ std::string SerializeSettings(const Settings& s)
     f << "noFreeze="        << (s.noFreeze ? 1 : 0) << "\n";
     f << "debug="           << (s.debug ? 1 : 0) << "\n";
     f << "extraArgs="       << s.extraArgs     << "\n";
+    f << "receivers="       << s.receivers     << "\n";
     return f.str();
 }
 
@@ -123,12 +139,14 @@ void ParseSettings(Settings& s, const std::string& text)
         else if (key == "noFreeze")        s.noFreeze = (val == "1");
         else if (key == "debug")           s.debug = (val == "1");
         else if (key == "extraArgs")       copy(s.extraArgs, sizeof(s.extraArgs), val);
+        else if (key == "receivers")       s.receivers = toInt(val, s.receivers);
     }
     auto clamp = [](int& v, int lo, int hi) { if (v < lo) v = lo; if (v > hi) v = hi; };
     clamp(s.videoSinkIdx,    0, kVideoSinkCount    - 1);
     clamp(s.videoDecoderIdx, 0, kVideoDecoderCount - 1);
     clamp(s.audioSinkIdx,    0, kAudioSinkCount    - 1);
     clamp(s.port,            1, 65535);
+    clamp(s.receivers,       1, kMaxReceivers);
     if (!(s.volume >= 0.0f)) s.volume = 0.0f;   // also catches NaN
     if (s.volume > 1.0f) s.volume = 1.0f;
     if (s.fps < 0 || s.fps > 256) s.fps = 0;
@@ -739,7 +757,10 @@ static std::string DefaultServerName(const UiState& ui)
     return ui.computerName.empty() ? std::string("UxPlay") : "UxPlay@" + ui.computerName;
 }
 
-static void PageConnection(Settings& s, const UiState& ui)
+static void DrawStateGlyph(ImDrawList* dl, const Session& ses, ImVec2 c, float r);
+static std::string StatusDetail(const Session& ses, const Settings& s, const UiState& ui, double now, int index);
+
+static void PageConnection(Settings& s, const UiState& ui, Session* sessions, int count, bool running)
 {
     SectionHeader("Network", "How Apple devices find and reach this receiver.");
     BeginCard();
@@ -754,6 +775,39 @@ static void PageConnection(Settings& s, const UiState& ui)
     if (s.port < 1) s.port = 1;
     if (s.port > 65535) s.port = 65535;
     EndRow();
+    EndCard();
+
+    SectionHeader("Multiple phones", "Mirror several phones at once, each in its own window.");
+    BeginCard();
+    {
+        static const Option kCounts[] = { { "1 phone", "" }, { "2 phones", "" }, { "3 phones", "" }, { "4 phones", "" } };
+        int idx = s.receivers - 1;
+        BeginRow("Phones at once", running ? "Stop the receiver to change this."
+                 : "Runs one receiver per phone, listed separately in the AirPlay menu. "
+                   "Each uses its own ports (base port + 10 per extra phone).", nullptr, 160);
+        ImGui::BeginDisabled(running);
+        if (ComboOptions("##v", &idx, kCounts, 4)) s.receivers = idx + 1;
+        ImGui::EndDisabled();
+        EndRow();
+    }
+    if (count > 1 || s.receivers > 1) {
+        double now = ImGui::GetTime();
+        std::string def = DefaultServerName(ui);
+        int n = ImMax(count, s.receivers);
+        for (int i = 0; i < n; ++i) {
+            const Session* se = i < count ? &sessions[i] : nullptr;
+            std::string name = ReceiverName(s, i, def);
+            std::string detail = se ? StatusDetail(*se, s, ui, now, i) : "Not running";
+            char label[160];
+            snprintf(label, sizeof(label), "%s##rx%d", name.c_str(), i);
+            BeginRow(name.c_str(), detail.c_str(), nullptr, 24);
+            ImVec2 p = ImGui::GetCursorScreenPos();
+            float fh = ImGui::GetFrameHeight();
+            if (se) DrawStateGlyph(ImGui::GetWindowDrawList(), *se, ImVec2(p.x + Px(12), p.y + fh * 0.5f), Px(9));
+            ImGui::Dummy(ImVec2(Px(24), fh));
+            EndRow();
+        }
+    }
     EndCard();
 
     SectionHeader("Security", "Control who is allowed to mirror to this PC.");
@@ -919,9 +973,9 @@ static void DrawStateGlyph(ImDrawList* dl, const Session& ses, ImVec2 c, float r
     }
 }
 
-static std::string StatusDetail(const Session& ses, const Settings& s, const UiState& ui, double now)
+static std::string StatusDetail(const Session& ses, const Settings& s, const UiState& ui, double now, int index)
 {
-    std::string name = s.serverName[0] ? std::string(s.serverName) : DefaultServerName(ui);
+    std::string name = ReceiverName(s, index, DefaultServerName(ui));
     std::string dev = ses.deviceName.empty() ? std::string("A device") : ses.deviceName;
     char port[32] = "";
     if (ses.port) snprintf(port, sizeof(port), "  \xc2\xb7  port %u", ses.port);
@@ -1044,7 +1098,29 @@ static void Sidebar(UiState& ui, UiPrefs& prefs, const Session& ses, bool compac
 
 // ── Status strip (top of content) ─────────────────────────────────────────────
 
-static void StatusStrip(const Settings& s, UiState& ui, Session& ses, const UiHost& host, ImVec2 a, ImVec2 b)
+// With several receivers the strip summarises them; the Connection page lists each one.
+static std::string MultiSummary(Session* sessions, int count, const Settings& s, const UiState& ui)
+{
+    int connected = 0, waiting = 0;
+    std::string devices;
+    for (int i = 0; i < count; ++i) {
+        const Session& x = sessions[i];
+        if (x.phase == Phase::Connected || x.phase == Phase::Connecting) {
+            ++connected;
+            if (!x.deviceName.empty()) devices += (devices.empty() ? "" : ", ") + x.deviceName;
+        } else if (x.phase == Phase::Waiting) ++waiting;
+    }
+    char buf[96];
+    snprintf(buf, sizeof(buf), "%d of %d receivers in use", connected, count);
+    std::string out = buf;
+    if (!devices.empty()) out += "  \xc2\xb7  " + devices;
+    else if (waiting) out += "  \xc2\xb7  visible as " + ReceiverName(s, 0, DefaultServerName(ui)) + " ... " +
+                             ReceiverName(s, count - 1, DefaultServerName(ui));
+    return out;
+}
+
+static void StatusStrip(const Settings& s, UiState& ui, Session& ses, Session* sessions, int count,
+                        const UiHost& host, ImVec2 a, ImVec2 b)
 {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     double now = ImGui::GetTime();
@@ -1084,7 +1160,8 @@ static void StatusStrip(const Settings& s, UiState& ui, Session& ses, const UiHo
     float ty = cy - (lh + sh + Px(3)) * 0.5f;
     dl->AddText(g_fonts.strong, lh, ImVec2(tx, ty),
                 Col(ses.phase == Phase::Off ? P->TextMuted : P->Text, 0.4f + 0.6f * t), look.label);
-    std::string full = StatusDetail(ses, s, ui, now);
+    std::string full = (count > 1 && ses.phase != Phase::Error && ses.phase != Phase::Off)
+                     ? MultiSummary(sessions, count, s, ui) : StatusDetail(ses, s, ui, now, (int)(&ses - sessions));
     std::string detail = Ellipsize(g_fonts.small, full, ImMax(Px(40), maxW));
     dl->AddText(g_fonts.small, sh, ImVec2(tx, ty + lh + Px(3)), Col(P->TextMuted, 0.4f + 0.6f * t), detail.c_str());
     ImGui::SetCursorScreenPos(ImVec2(tx, ty));
@@ -1179,7 +1256,7 @@ static bool ContainsNoCase(const std::string& hay, const char* needle)
     return it != hay.end();
 }
 
-static void ConsolePanel(UiState& ui, UiPrefs& prefs, Session& ses, const UiHost& host, ImVec2 a, ImVec2 b,
+static void ConsolePanel(UiState& ui, UiPrefs& prefs, Session& ses, int count, const UiHost& host, ImVec2 a, ImVec2 b,
                          float maxH)
 {
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1203,10 +1280,10 @@ static void ConsolePanel(UiState& ui, UiPrefs& prefs, Session& ses, const UiHost
     DrawIcon(dl, Icon::Console, ImVec2(a.x + pad + Px(7), cy), Px(14), Col(P->TextMuted));
     float lx = a.x + pad + Px(22);
     dl->AddText(g_fonts.strong, g_fonts.strong->FontSize, ImVec2(lx, cy - g_fonts.strong->FontSize * 0.5f), Col(P->Text), "Console");
-    char count[48];
-    snprintf(count, sizeof(count), "%zu lines", ses.lines.size());
+    char lineCount[48];
+    snprintf(lineCount, sizeof(lineCount), "%zu lines", ses.lines.size());
     float cx = lx + g_fonts.strong->CalcTextSizeA(g_fonts.strong->FontSize, FLT_MAX, 0, "Console").x + Px(10);
-    dl->AddText(g_fonts.small, g_fonts.small->FontSize, ImVec2(cx, cy - g_fonts.small->FontSize * 0.5f), Col(P->TextFaint), count);
+    dl->AddText(g_fonts.small, g_fonts.small->FontSize, ImVec2(cx, cy - g_fonts.small->FontSize * 0.5f), Col(P->TextFaint), lineCount);
 
     const float bs = 28.0f;
     float x = b.x - pad;
@@ -1225,6 +1302,16 @@ static void ConsolePanel(UiState& ui, UiPrefs& prefs, Session& ses, const UiHost
     if (IconButton("##follow", Icon::Follow, ui.consoleFollow ? "Auto-scroll is on (click to pause)"
                                                             : "Auto-scroll is paused (click to resume)", bs, ui.consoleFollow))
         ui.consoleFollow = !ui.consoleFollow;
+    if (count > 1) {   // which receiver's output to show
+        static const Option kRx[] = { { "Receiver 1", "" }, { "Receiver 2", "" }, { "Receiver 3", "" }, { "Receiver 4", "" } };
+        float cw = Px(130);
+        x -= cw;
+        ImGui::SetCursorScreenPos(ImVec2(x, cy - ImGui::GetFrameHeight() * 0.5f));
+        ImGui::SetNextItemWidth(cw);
+        ComboOptions("##rx", &ui.consoleReceiver, kRx, count);
+        ImGui::SetItemTooltip("Show the output of this receiver");
+        x -= Px(6);
+    }
     float fw = ImMin(Px(200), x - (cx + Px(70)) - Px(4));
     if (fw >= Px(80)) {
         x -= fw;
@@ -1486,8 +1573,25 @@ static void AboutDialog(UiState& ui, const Session& ses)
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 
-void DrawLauncherUI(Settings& s, UiState& ui, Session& ses, UiPrefs& prefs, const UiHost& host, const UiFonts& fonts)
+// The session the strip, sidebar and error card represent: an error first, then the
+// most advanced state (Connected > Connecting > Disconnected > Starting > Off).
+static int PrimarySession(Session* sessions, int count)
 {
+    int best = 0;   // Phase is declared in that order, so a larger value is "further along"
+    for (int i = 0; i < count; ++i) {
+        if (sessions[i].hasError) return i;
+        if ((int)sessions[i].phase > (int)sessions[best].phase) best = i;
+    }
+    return best;
+}
+
+void DrawLauncherUI(Settings& s, UiState& ui, Session* sessions, int count, UiPrefs& prefs,
+                    const UiHost& host, const UiFonts& fonts)
+{
+    if (count < 1) count = 1;
+    Session& ses = sessions[PrimarySession(sessions, count)];
+    if (ui.consoleReceiver >= count) ui.consoleReceiver = 0;
+    Session& conSes = sessions[ui.consoleReceiver];
     g_fonts = fonts;
     g_reduceMotion = ui.reduceMotion;
     ImGuiIO& io = ImGui::GetIO();
@@ -1508,8 +1612,10 @@ void DrawLauncherUI(Settings& s, UiState& ui, Session& ses, UiPrefs& prefs, cons
     if (!args.empty()) { cmd += " "; cmd += args; }
 
     // Each new error also raises one toast (never repeated for the same error).
-    if (ses.errorSerial != ui.seenErrorSerial) {
-        ui.seenErrorSerial = ses.errorSerial;
+    int serialSum = 0;
+    for (int i = 0; i < count; ++i) serialSum += sessions[i].errorSerial;
+    if (serialSum != ui.seenErrorSerial) {
+        ui.seenErrorSerial = serialSum;
         ui.showTechnical = false;
         if (ses.hasError) ShowToast(ui, ses.error.title.c_str(), ses.error.fatal);
     }
@@ -1528,7 +1634,7 @@ void DrawLauncherUI(Settings& s, UiState& ui, Session& ses, UiPrefs& prefs, cons
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(Px(10), Px(8)));
     if (ImGui::BeginMenuBar()) {
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + Px(6));
-        MenuBar(s, ui, ses, prefs, host, running);
+        MenuBar(s, ui, conSes, prefs, host, running);
         ImGui::EndMenuBar();
     }
     ImGui::PopStyleVar();
@@ -1553,7 +1659,7 @@ void DrawLauncherUI(Settings& s, UiState& ui, Session& ses, UiPrefs& prefs, cons
     ImGui::EndChild();
 
     // Status strip
-    StatusStrip(s, ui, ses, host, ImVec2(sideW, y0), ImVec2(W, y0 + statusH));
+    StatusStrip(s, ui, ses, sessions, count, host, ImVec2(sideW, y0), ImVec2(W, y0 + statusH));
 
     // Content canvas with a faint accent wash at the top
     ImDrawList* bg = ImGui::GetWindowDrawList();
@@ -1593,7 +1699,7 @@ void DrawLauncherUI(Settings& s, UiState& ui, Session& ses, UiPrefs& prefs, cons
         ImGui::Dummy(ImVec2(0, Px(2)));
 
         switch (ui.page) {
-        case 0: PageConnection(s, ui);              break;
+        case 0: PageConnection(s, ui, sessions, count, running); break;
         case 1: PageDisplay(s, host);               break;
         case 2: PageAudio(s);                       break;
         case 3: PageAdvanced(s, ui, prefs, cmd);    break;
@@ -1605,7 +1711,7 @@ void DrawLauncherUI(Settings& s, UiState& ui, Session& ses, UiPrefs& prefs, cons
     ImGui::EndChild();
 
     if (consoleShown)
-        ConsolePanel(ui, prefs, ses, host, ImVec2(sideW, y0 + mainH - consoleH), ImVec2(W, y0 + mainH), maxC);
+        ConsolePanel(ui, prefs, conSes, count, host, ImVec2(sideW, y0 + mainH - consoleH), ImVec2(W, y0 + mainH), maxC);
     else   // soft shadow cast onto the scrolling content above the footer
         ImGui::GetWindowDrawList()->AddRectFilledMultiColor(ImVec2(sideW, y0 + mainH - Px(10)), ImVec2(W, y0 + mainH),
             Col(WithAlpha(P->Shadow, 0.0f)), Col(WithAlpha(P->Shadow, 0.0f)),
@@ -1613,7 +1719,7 @@ void DrawLauncherUI(Settings& s, UiState& ui, Session& ses, UiPrefs& prefs, cons
 
     Footer(s, ui, host, running, dirty, cmd, ImVec2(sideW, y0 + mainH), ImVec2(W, y0 + H));
 
-    AboutDialog(ui, ses);
+    AboutDialog(ui, sessions[0]);
 
     // Toast (fades in/out above the footer or console, right aligned)
     if (!ui.toast.empty()) {

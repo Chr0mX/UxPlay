@@ -198,20 +198,26 @@ private:
 
 static Logger g_log;
 
-// ── Receiver process ──────────────────────────────────────────────────────────
+// ── Receiver processes ────────────────────────────────────────────────────────
+// One uxplay.exe per receiver slot ("Phones at once"); slot 0 is the original
+// single receiver. Each slot has its own pipe, reader thread and Session.
 
 struct Receiver {
     HANDLE hProcess = NULL;
     HANDLE hThread  = NULL;
     HANDLE hPipe    = NULL;     // read end of stdout/stderr
     HANDLE hReader  = NULL;     // pipe reader thread
+    int    index    = 0;
     std::mutex              mtx;
     std::deque<std::string> pending;   // lines waiting for the UI thread
     size_t                  dropped = 0;
 };
 
-static Receiver g_rx;
-static std::string g_secret;   // receiver password, masked in captured output (set before the reader starts)
+static Receiver g_rx[kMaxReceivers];
+static Session  g_sessions[kMaxReceivers];
+static int      g_rxCount = 1;         // receivers in the current/last run (UI shows this many)
+static std::string g_secret;   // receiver password, masked in captured output (set before readers start)
+static double   g_now = 0.0;           // ImGui clock, updated each frame
 
 static void Redact(std::string& line)
 {
@@ -219,16 +225,18 @@ static void Redact(std::string& line)
     for (size_t p = line.find(g_secret); p != std::string::npos; p = line.find(g_secret, p + 3))
         line.replace(p, g_secret.size(), "***");
 }
-static Session  g_session;
-static double   g_now = 0.0;           // ImGui clock, updated each frame
 
-static DWORD WINAPI PipeReaderThread(LPVOID)
+static std::string RxTag(int i) { return i == 0 ? std::string("uxplay") : "uxplay" + std::to_string(i + 1); }
+
+static DWORD WINAPI PipeReaderThread(LPVOID param)
 {
+    Receiver& rx = *static_cast<Receiver*>(param);
+    const std::string tag = RxTag(rx.index);
     std::string partial;
     char buf[4096];
     for (;;) {
         DWORD got = 0;
-        if (!ReadFile(g_rx.hPipe, buf, sizeof(buf), &got, NULL) || got == 0) break;   // EOF / cancelled
+        if (!ReadFile(rx.hPipe, buf, sizeof(buf), &got, NULL) || got == 0) break;   // EOF / cancelled
         partial.append(buf, got);
         size_t start = 0, nl;
         std::vector<std::string> lines;
@@ -242,92 +250,103 @@ static DWORD WINAPI PipeReaderThread(LPVOID)
         if (partial.size() > 64 * 1024) { lines.push_back(partial); partial.clear(); }   // no newline for ages
         for (auto& l : lines) {
             Redact(l);
-            if (l.compare(0, 15, "@uxplay-status ") == 0) g_log.Write("EVENT", "uxplay", l.substr(15));
-            else g_log.Write("OUT", "uxplay", l);
+            if (l.compare(0, 15, "@uxplay-status ") == 0) g_log.Write("EVENT", tag.c_str(), l.substr(15));
+            else g_log.Write("OUT", tag.c_str(), l);
         }
-        std::lock_guard<std::mutex> lk(g_rx.mtx);
-        for (auto& l : lines) g_rx.pending.push_back(std::move(l));
-        while (g_rx.pending.size() > 20000) { g_rx.pending.pop_front(); ++g_rx.dropped; }   // UI stalled: bound memory
+        std::lock_guard<std::mutex> lk(rx.mtx);
+        for (auto& l : lines) rx.pending.push_back(std::move(l));
+        while (rx.pending.size() > 20000) { rx.pending.pop_front(); ++rx.dropped; }   // UI stalled: bound memory
     }
     if (!partial.empty()) {
         Redact(partial);
-        g_log.Write("OUT", "uxplay", partial);
-        std::lock_guard<std::mutex> lk(g_rx.mtx);
-        g_rx.pending.push_back(partial);
+        g_log.Write("OUT", tag.c_str(), partial);
+        std::lock_guard<std::mutex> lk(rx.mtx);
+        rx.pending.push_back(partial);
     }
     return 0;
 }
 
-static void DrainPending()
+static void DrainPending(int i)
 {
+    Receiver& rx = g_rx[i];
     std::deque<std::string> lines;
     size_t dropped = 0;
     {
-        std::lock_guard<std::mutex> lk(g_rx.mtx);
-        lines.swap(g_rx.pending);
-        dropped = g_rx.dropped; g_rx.dropped = 0;
+        std::lock_guard<std::mutex> lk(rx.mtx);
+        lines.swap(rx.pending);
+        dropped = rx.dropped; rx.dropped = 0;
     }
-    if (dropped) g_session.AppNote(g_now, std::to_string(dropped) + " output lines skipped in the console (still in the log file).");
-    for (const auto& l : lines) g_session.OnLine(g_now, l);
+    if (dropped) g_sessions[i].AppNote(g_now, std::to_string(dropped) + " output lines skipped in the console (still in the log file).");
+    for (const auto& l : lines) g_sessions[i].OnLine(g_now, l);
 }
 
 // Joins the reader and closes all handles. The reader may be blocked in ReadFile
 // if a helper process inherited the pipe, so pending I/O is cancelled first.
-static void ReleaseProcessHandles()
+static void ReleaseProcessHandles(int i)
 {
-    if (g_rx.hReader) {
-        if (WaitForSingleObject(g_rx.hReader, 1500) == WAIT_TIMEOUT) {
-            CancelSynchronousIo(g_rx.hReader);
-            WaitForSingleObject(g_rx.hReader, 2000);
+    Receiver& rx = g_rx[i];
+    if (rx.hReader) {
+        if (WaitForSingleObject(rx.hReader, 1500) == WAIT_TIMEOUT) {
+            CancelSynchronousIo(rx.hReader);
+            WaitForSingleObject(rx.hReader, 2000);
         }
-        CloseHandle(g_rx.hReader); g_rx.hReader = NULL;
+        CloseHandle(rx.hReader); rx.hReader = NULL;
     }
-    if (g_rx.hPipe)    { CloseHandle(g_rx.hPipe);    g_rx.hPipe = NULL; }
-    if (g_rx.hThread)  { CloseHandle(g_rx.hThread);  g_rx.hThread = NULL; }
-    if (g_rx.hProcess) { CloseHandle(g_rx.hProcess); g_rx.hProcess = NULL; }
-    DrainPending();
+    if (rx.hPipe)    { CloseHandle(rx.hPipe);    rx.hPipe = NULL; }
+    if (rx.hThread)  { CloseHandle(rx.hThread);  rx.hThread = NULL; }
+    if (rx.hProcess) { CloseHandle(rx.hProcess); rx.hProcess = NULL; }
+    DrainPending(i);
 }
 
-static bool IsUxPlayRunning()
+static bool RxRunning(int i)
 {
-    if (!g_rx.hProcess) return false;
-    return WaitForSingleObject(g_rx.hProcess, 0) == WAIT_TIMEOUT;
+    return g_rx[i].hProcess && WaitForSingleObject(g_rx[i].hProcess, 0) == WAIT_TIMEOUT;
 }
 
-// Detects an exit the user did not ask for (called once per frame).
+static bool IsUxPlayRunning()   // any receiver
+{
+    for (int i = 0; i < kMaxReceivers; ++i) if (RxRunning(i)) return true;
+    return false;
+}
+
+// Detects exits the user did not ask for (called once per frame).
 static void PollProcess()
 {
-    DrainPending();
-    if (g_rx.hProcess && WaitForSingleObject(g_rx.hProcess, 0) == WAIT_OBJECT_0) {
-        DWORD code = 0;
-        GetExitCodeProcess(g_rx.hProcess, &code);
-        ReleaseProcessHandles();
-        char buf[96];
-        snprintf(buf, sizeof(buf), "uxplay.exe exited on its own with code %lu", (unsigned long)code);
-        g_log.Write("WARN", "app", buf);
-        g_session.OnProcessExited(g_now, (long)code);
+    for (int i = 0; i < kMaxReceivers; ++i) {
+        DrainPending(i);
+        if (g_rx[i].hProcess && WaitForSingleObject(g_rx[i].hProcess, 0) == WAIT_OBJECT_0) {
+            DWORD code = 0;
+            GetExitCodeProcess(g_rx[i].hProcess, &code);
+            ReleaseProcessHandles(i);
+            char buf[96];
+            snprintf(buf, sizeof(buf), "uxplay.exe exited on its own with code %lu", (unsigned long)code);
+            g_log.Write("WARN", RxTag(i).c_str(), buf);
+            g_sessions[i].OnProcessExited(g_now, (long)code);
+        }
     }
 }
 
 static void SetOverlayRotation(int rot);
+static std::string DefaultName();
 
-static void LaunchUxPlay(const Settings& s)
+static void LaunchOne(const Settings& s, int i)
 {
-    if (IsUxPlayRunning()) return;                 // never two receivers at once
-    if (g_rx.hProcess) ReleaseProcessHandles();    // previous run's leftovers
+    Receiver& rx = g_rx[i];
+    Session& ses = g_sessions[i];
+    if (rx.hProcess) ReleaseProcessHandles(i);    // previous run's leftovers
+    rx.index = i;
 
     std::wstring exePath = g_exeDir + L"uxplay.exe";
     if (GetFileAttributesW(exePath.c_str()) == INVALID_FILE_ATTRIBUTES) {
         g_log.Write("ERROR", "app", "uxplay.exe not found at " + Utf8(exePath));
-        g_session.OnLaunchFailed(g_now, MakeMissingExeError(Utf8(exePath)));
+        ses.OnLaunchFailed(g_now, MakeMissingExeError(Utf8(exePath)));
         return;
     }
 
-    std::string args = BuildArgs(s);
-    g_secret = s.password;
+    std::string args = BuildArgs(s, false, i, DefaultName());
     std::wstring cmdLine = L"\"" + exePath + L"\"";
     if (!args.empty()) cmdLine += L" " + Wide(args);
-    std::string redacted = "uxplay.exe " + BuildArgs(s, true);
+    std::string redacted = "uxplay.exe " + BuildArgs(s, true, i, DefaultName());
 
     // stdout+stderr -> one pipe; stdin -> NUL. Only these two handles are inherited.
     SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
@@ -335,7 +354,7 @@ static void LaunchUxPlay(const Settings& s)
     if (!CreatePipe(&rd, &wr, &sa, 64 * 1024)) {
         DWORD e = GetLastError();
         g_log.Write("ERROR", "app", "CreatePipe failed: " + LastErrorText(e));
-        g_session.OnLaunchFailed(g_now, MakeLaunchError(LastErrorText(e), e));
+        ses.OnLaunchFailed(g_now, MakeLaunchError(LastErrorText(e), e));
         return;
     }
     SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
@@ -372,28 +391,39 @@ static void LaunchUxPlay(const Settings& s)
     if (!ok) {
         CloseHandle(rd);
         g_log.Write("ERROR", "app", "CreateProcess failed: " + LastErrorText(err));
-        g_session.OnLaunchFailed(g_now, MakeLaunchError(LastErrorText(err), err));
+        ses.OnLaunchFailed(g_now, MakeLaunchError(LastErrorText(err), err));
         return;
     }
-    g_rx.hProcess = pi.hProcess;
-    g_rx.hThread  = pi.hThread;
-    g_rx.hPipe    = rd;
-    g_rx.hReader  = CreateThread(NULL, 0, PipeReaderThread, NULL, 0, NULL);
-    g_log.Write("INFO", "app", "Started (PID " + std::to_string(pi.dwProcessId) + "): " + redacted);
-    g_session.OnLaunched(g_now, pi.dwProcessId, redacted);
+    rx.hProcess = pi.hProcess;
+    rx.hThread  = pi.hThread;
+    rx.hPipe    = rd;
+    rx.hReader  = CreateThread(NULL, 0, PipeReaderThread, &rx, 0, NULL);
+    g_log.Write("INFO", RxTag(i).c_str(), "Started (PID " + std::to_string(pi.dwProcessId) + "): " + redacted);
+    ses.OnLaunched(g_now, pi.dwProcessId, redacted);
+}
+
+static void LaunchUxPlay(const Settings& s)
+{
+    if (IsUxPlayRunning()) return;                 // a run is already active: never duplicate receivers
+    g_secret = s.password;
+    g_rxCount = s.receivers < 1 ? 1 : (s.receivers > kMaxReceivers ? kMaxReceivers : s.receivers);
+    for (int i = 0; i < kMaxReceivers; ++i) if (i >= g_rxCount) g_sessions[i] = Session();
+    for (int i = 0; i < g_rxCount; ++i) LaunchOne(s, i);
 }
 
 static void StopUxPlay()
 {
-    if (!g_rx.hProcess) return;
     SetOverlayRotation(0);
-    if (IsUxPlayRunning()) {
-        g_session.OnStoppedByUser(g_now);   // first, so the exit is not reported as a crash
-        TerminateProcess(g_rx.hProcess, 0);
-        WaitForSingleObject(g_rx.hProcess, 3000);
-        g_log.Write("INFO", "app", "Receiver stopped by user");
+    for (int i = 0; i < kMaxReceivers; ++i) {
+        if (!g_rx[i].hProcess) continue;
+        if (RxRunning(i)) {
+            g_sessions[i].OnStoppedByUser(g_now);   // first, so the exit is not reported as a crash
+            TerminateProcess(g_rx[i].hProcess, 0);
+            WaitForSingleObject(g_rx[i].hProcess, 3000);
+            g_log.Write("INFO", RxTag(i).c_str(), "Receiver stopped by user");
+        }
+        ReleaseProcessHandles(i);
     }
-    ReleaseProcessHandles();
 }
 
 // ── Player window rotation overlay (GDI PlgBlt, no stream reconnect) ──────────
@@ -401,10 +431,10 @@ static void StopUxPlay()
 static HWND   g_hOverlay   = NULL;
 static int    g_overlayRot = 0;   // 0=none, 1=90°CW, 2=180°, 3=270°CW
 
-static HWND FindProcessWindow()
+static HWND FindProcessWindow(int i = 0)   // rotation applies to receiver 1's player
 {
-    if (!IsUxPlayRunning()) return NULL;
-    DWORD targetPid = GetProcessId(g_rx.hProcess);
+    if (!RxRunning(i)) return NULL;
+    DWORD targetPid = GetProcessId(g_rx[i].hProcess);
     struct Ctx { DWORD pid; HWND hwnd; };
     Ctx ctx = { targetPid, NULL };
     EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
@@ -512,14 +542,16 @@ static void LoadAppIcons(HINSTANCE hInst)
 
 // The player window belongs to uxplay.exe (created by GStreamer); give it the
 // same icon so it matches in the taskbar and Alt+Tab.
-static HWND g_brandedPlayer = NULL;
-static void BrandPlayerWindow()
+static HWND g_brandedPlayer[kMaxReceivers] = {};
+static void BrandPlayerWindows()
 {
-    HWND h = FindProcessWindow();
-    if (!h || h == g_brandedPlayer) return;
-    SendMessageTimeoutW(h, WM_SETICON, ICON_BIG,   (LPARAM)g_iconBig,   SMTO_ABORTIFHUNG, 200, NULL);
-    SendMessageTimeoutW(h, WM_SETICON, ICON_SMALL, (LPARAM)g_iconSmall, SMTO_ABORTIFHUNG, 200, NULL);
-    g_brandedPlayer = h;
+    for (int i = 0; i < kMaxReceivers; ++i) {
+        HWND h = FindProcessWindow(i);
+        if (!h || h == g_brandedPlayer[i]) continue;
+        SendMessageTimeoutW(h, WM_SETICON, ICON_BIG,   (LPARAM)g_iconBig,   SMTO_ABORTIFHUNG, 200, NULL);
+        SendMessageTimeoutW(h, WM_SETICON, ICON_SMALL, (LPARAM)g_iconSmall, SMTO_ABORTIFHUNG, 200, NULL);
+        g_brandedPlayer[i] = h;
+    }
 }
 
 // ── System tray ───────────────────────────────────────────────────────────────
@@ -679,6 +711,11 @@ static void RestorePlacement(HWND hwnd, int defaultW, int defaultH)
     wp.showCmd = g_prefs.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
     wp.flags = 0;
     SetWindowPlacement(hwnd, &wp);
+}
+
+static std::string DefaultName()
+{
+    return g_ui.computerName.empty() ? std::string("UxPlay") : "UxPlay@" + g_ui.computerName;
 }
 
 // ── UI host bindings ──────────────────────────────────────────────────────────
@@ -991,7 +1028,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     ShowWindow(hwnd, g_prefs.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL);
     UpdateWindow(hwnd);
 
-    Phase  loggedPhase = g_session.phase;
+    Phase  loggedPhase[kMaxReceivers] = {};
     double lastBrand = 0.0;
     bool done = false;
 
@@ -1010,7 +1047,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             g_now = ImGui::GetTime();
             PollProcess();
             if (g_inTray) {
-                std::wstring tip = IsUxPlayRunning() ? L"UxPlay \x2014 " + Wide(PhaseLabel(g_session.phase)) : L"UxPlay";
+                std::wstring tip = IsUxPlayRunning() ? L"UxPlay \x2014 " + Wide(PhaseLabel(g_sessions[0].phase)) : L"UxPlay";
                 if (tip != g_nid.szTip) {
                     wcsncpy_s(g_nid.szTip, tip.c_str(), _TRUNCATE);
                     g_nid.uFlags = NIF_TIP;
@@ -1035,17 +1072,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         g_now = ImGui::GetTime();
 
         PollProcess();
-        if (g_session.phase != loggedPhase) {
-            loggedPhase = g_session.phase;
-            std::string what = std::string("State: ") + PhaseLabel(loggedPhase);
-            if (!g_session.deviceName.empty() && (loggedPhase == Phase::Connecting || loggedPhase == Phase::Connected))
-                what += " (" + g_session.deviceName + ")";
-            if (loggedPhase == Phase::Error) what += " - " + g_session.error.title;
-            g_log.Write(loggedPhase == Phase::Error ? "WARN" : "INFO", "app", what);
+        for (int i = 0; i < kMaxReceivers; ++i) {
+            const Session& se = g_sessions[i];
+            if (se.phase == loggedPhase[i]) continue;
+            loggedPhase[i] = se.phase;
+            std::string what = std::string("State: ") + PhaseLabel(se.phase);
+            if (!se.deviceName.empty() && (se.phase == Phase::Connecting || se.phase == Phase::Connected))
+                what += " (" + se.deviceName + ")";
+            if (se.phase == Phase::Error) what += " - " + se.error.title;
+            g_log.Write(se.phase == Phase::Error ? "WARN" : "INFO", RxTag(i).c_str(), what);
         }
-        if (IsUxPlayRunning() && g_now - lastBrand > 1.0) { lastBrand = g_now; BrandPlayerWindow(); }
+        if (IsUxPlayRunning() && g_now - lastBrand > 1.0) { lastBrand = g_now; BrandPlayerWindows(); }
 
-        DrawLauncherUI(g_settings, g_ui, g_session, g_prefs, host, fonts);
+        DrawLauncherUI(g_settings, g_ui, g_sessions, g_rxCount, g_prefs, host, fonts);   // sessions of the current/last run
 
         if (g_ui.prefsDirty) { g_ui.prefsDirty = false; MarkPrefsDirty(); }
         // Debounced: geometry and preference changes are written at most once a second.
