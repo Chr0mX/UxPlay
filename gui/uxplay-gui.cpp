@@ -1179,10 +1179,21 @@ static void CleanupRenderTarget()
 
 // ── Win32 message loop ────────────────────────────────────────────────────────
 
+// Messages that mean the user is doing something (keep redrawing smoothly).
+static bool IsUserInput(UINT m)
+{
+    return (m >= WM_MOUSEFIRST && m <= WM_MOUSELAST) || (m >= WM_KEYFIRST && m <= WM_KEYLAST) ||
+           (m >= WM_NCMOUSEMOVE && m <= WM_NCXBUTTONDBLCLK) || m == WM_MOUSELEAVE || m == WM_NCMOUSELEAVE;
+}
+static bool g_kickRedraw = false;   // set by window events delivered straight to WndProc
+
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    if (msg == WM_SIZE || msg == WM_ACTIVATE || msg == WM_SETFOCUS || msg == WM_SHOWWINDOW ||
+        msg == WM_DPICHANGED || msg == WM_SETTINGCHANGE)
+        g_kickRedraw = true;
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) return true;
     switch (msg) {
     case WM_SIZE:
@@ -1413,12 +1424,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     double lastBrand = 0.0;
     bool done = false;
 
+    // Idle throttling: the UI is redrawn at display rate only while the user
+    // interacts with it, something animates, or receiver output arrives.
+    // Otherwise the loop sleeps until a message arrives (at most 1 s, or 250 ms
+    // while a connection timer is shown, so status and process monitoring keep up). This keeps the launcher
+    // near 0% CPU/GPU while it sits open.
+    double lastActivity = 0.0;   // last real input (timers and system messages don't count)
+    uint64_t lastLines = 0;
     while (!done) {
         MSG msg;
         while (PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
             if (msg.message == WM_QUIT) done = true;
+            if (IsUserInput(msg.message)) lastActivity = ImGui::GetTime();
         }
         if (done) break;
 
@@ -1482,7 +1501,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, cc);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-        g_pSwapChain->Present(1, 0);
+        HRESULT pr = g_pSwapChain->Present(1, 0);
+
+        if (g_kickRedraw) { g_kickRedraw = false; lastActivity = g_now; }
+        uint64_t lines = 0;
+        for (int i = 0; i < kMaxReceivers; ++i) lines += g_sessions[i].linesAdded;
+        if (lines != lastLines) { lastLines = lines; lastActivity = g_now; }
+        bool busy = g_ui.animating || g_dpiChanged || ImGui::IsAnyItemActive() ||
+                    ImGui::IsMouseDown(ImGuiMouseButton_Left) || g_now - lastActivity < 0.5;
+        if (pr == DXGI_STATUS_OCCLUDED)
+            MsgWaitForMultipleObjects(0, NULL, FALSE, 250, QS_ALLINPUT);   // window covered: nothing visible
+        else if (!busy) {
+            // Wake 4x/s only while a connection timer is on screen; otherwise once a second.
+            bool ticking = false;
+            for (int i = 0; i < kMaxReceivers; ++i) ticking |= g_sessions[i].phase == Phase::Connected;
+            MsgWaitForMultipleObjects(0, NULL, FALSE, ticking ? 250 : 1000, QS_ALLINPUT);
+        }
     }
 
     // Shutdown: persist, stop the receiver (as before), release everything.

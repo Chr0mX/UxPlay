@@ -99,6 +99,7 @@ struct UiState {
     bool        prefsDirty     = false;   // host persists UiPrefs when set
     bool        systemDark     = true;    // host: OS app theme
     bool        reduceMotion   = false;   // host: OS animation preference
+    bool        animating      = false;   // set by the UI: something is moving, keep redrawing
     int         appliedTheme   = -1;      // -1 none, 0 light, 1 dark
     int         seenErrorSerial = 0;
     int         consoleReceiver = 0;      // which receiver's output the console shows
