@@ -210,6 +210,7 @@ namespace tok {
 
 static float   g_scale = 1.0f;
 static bool    g_reduceMotion = false;
+static bool    g_animating = false;   // any transition still in progress this frame
 static UiFonts g_fonts;
 
 static float Px(float v) { return std::floor(v * g_scale + 0.5f); }
@@ -231,6 +232,7 @@ static float Animate(ImGuiID id, float target, float speed = 16.0f) {
     if (*v < 0.0f || g_reduceMotion) { *v = target; return target; }
     *v += (target - *v) * ImMin(1.0f, ImGui::GetIO().DeltaTime * speed);
     if (std::fabs(*v - target) < 0.001f) *v = target;
+    else g_animating = true;
     return *v;
 }
 static bool NavCursorOn() { return ImGui::GetCurrentContext()->NavCursorVisible; }
@@ -445,6 +447,7 @@ static void DrawSpinner(ImDrawList* dl, ImVec2 c, float r, ImU32 track, ImU32 co
 {
     dl->AddCircle(c, r, track, 32, Px(2));
     float t = g_reduceMotion ? 0.0f : (float)ImGui::GetTime() * 5.0f;
+    if (!g_reduceMotion) g_animating = true;
     dl->PathArcTo(c, r, t, t + IM_PI * 0.6f, 16);
     dl->PathStroke(col, 0, Px(2));
 }
@@ -1604,6 +1607,7 @@ void DrawLauncherUI(Settings& s, UiState& ui, Session* sessions, int count, UiPr
     Session& conSes = sessions[ui.consoleReceiver];
     g_fonts = fonts;
     g_reduceMotion = ui.reduceMotion;
+    g_animating = false;
     ImGuiIO& io = ImGui::GetIO();
     double now = ImGui::GetTime();
 
@@ -1733,6 +1737,7 @@ void DrawLauncherUI(Settings& s, UiState& ui, Session* sessions, int count, UiPr
 
     // Toast (fades in/out above the footer or console, right aligned)
     if (!ui.toast.empty()) {
+        g_animating = true;   // fades, then must disappear on time
         float remain = (float)(ui.toastUntil - now);
         if (remain <= 0) { ui.toast.clear(); }
         else {
@@ -1758,5 +1763,6 @@ void DrawLauncherUI(Settings& s, UiState& ui, Session* sessions, int count, UiPr
         }
     }
 
+    ui.animating = g_animating;
     ImGui::End();
 }
