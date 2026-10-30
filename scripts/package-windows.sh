@@ -235,6 +235,14 @@ UxPlay turns your PC into an AirPlay receiver: mirror an iPhone, iPad or Mac scr
 1. Open **UxPlay** (\`uxplay-gui.exe\`) and press **Start**. Allow it through Windows Firewall if asked. Nothing else to install (no Bonjour or iTunes needed).
 2. On your iPhone or iPad, open **Control Center → Screen Mirroring** and pick the name UxPlay shows.
 
+## What's in this folder
+
+| File | What it is |
+|---|---|
+| \`uxplay-gui.exe\` | **UxPlay: open this one.** The window with settings, status and the Start button. |
+| \`uxplay.exe\` | The receiver engine. UxPlay starts it for you in the background, one per phone; you never need to open it. Task Manager shows it as *UxPlay receiver engine*. |
+| \`uxplay.bat\` | Runs the engine from the command line with your own options (advanced). |
+
 ## The UxPlay window
 
 - **Status** at the top shows whether a device is connected, which one, and for how long.

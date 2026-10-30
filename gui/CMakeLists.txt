@@ -20,6 +20,10 @@ set(UXPLAY_VER_PATCH "${CMAKE_MATCH_3}")
 if(UXPLAY_VER_PATCH STREQUAL "")
   set(UXPLAY_VER_PATCH 0)
 endif()
+# Also used for uxplay.exe's version info (top-level CMakeLists.txt).
+set(UXPLAY_VER_MAJOR "${UXPLAY_VER_MAJOR}" PARENT_SCOPE)
+set(UXPLAY_VER_MINOR "${UXPLAY_VER_MINOR}" PARENT_SCOPE)
+set(UXPLAY_VER_PATCH "${UXPLAY_VER_PATCH}" PARENT_SCOPE)
 
 add_executable(uxplay-gui WIN32
   uxplay-gui.cpp
