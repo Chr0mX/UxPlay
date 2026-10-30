@@ -52,7 +52,7 @@ echo "==> Configuring (decoders: ${DECODERS})"
   --disable-everything \
   --enable-decoder="${DECODERS}" \
   --enable-parser="${PARSERS}" \
-  --enable-avcodec --enable-avformat --enable-avfilter \
+  --enable-avcodec --enable-avformat --enable-avfilter --disable-avdevice \
   --enable-swresample --enable-swscale \
   > configure.log 2>&1 || { tail -30 configure.log; warn "configure failed"; }
 

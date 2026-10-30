@@ -214,36 +214,46 @@ fi
 SLIM_BIN="${FFMPEG_SLIM_PREFIX:-/opt/ffmpeg-slim}/bin"
 
 dll_imports() {   # lower-case DLL names a PE file imports
-  objdump -p "$1" 2>/dev/null | awk '/DLL Name:/ {print tolower($3)}'
+  objdump -p "$1" 2>/dev/null | awk '/DLL Name:/ {print tolower($3)}' || true
 }
 
 gst_inventory() {   # "<plugins> <features>" plus the libav decoder names, or empty if it cannot run
-  local inspect="${DIST_DIR}/gst-inspect-slimcheck.exe" reg out
+  # Never fails (this script runs with set -e): an empty result means "could not check".
+  local inspect="${DIST_DIR}/gst-inspect-slimcheck.exe" regdir out plugins scanner registry
   cp "${UCRT64_BIN}/gst-inspect-1.0.exe" "${inspect}" || return 0
-  reg="$(mktemp -d)/registry.bin"
-  out=$(cd "${DIST_DIR}" && PATH="/c/Windows/System32:/c/Windows" \
-        GST_PLUGIN_PATH="$(cygpath -w "${DIST_DIR}/gst-plugins")" GST_PLUGIN_SYSTEM_PATH="" \
-        GST_PLUGIN_SCANNER="$(cygpath -w "${DIST_DIR}/gst-plugin-scanner.exe")" \
-        GST_REGISTRY="$(cygpath -w "${reg}")" ./gst-inspect-slimcheck.exe 2>/dev/null)
+  regdir="$(mktemp -d)"
+  plugins="$(cygpath -w "${DIST_DIR}/gst-plugins")"
+  scanner="$(cygpath -w "${DIST_DIR}/gst-plugin-scanner.exe")"
+  registry="$(cygpath -w "${regdir}/registry.bin")"
+  # Only Windows on PATH, so nothing can be borrowed from MSYS2.
+  out=$(cd "${DIST_DIR}" && PATH="/c/Windows/System32:/c/Windows" GST_PLUGIN_PATH="${plugins}" \
+        GST_PLUGIN_SYSTEM_PATH="" GST_PLUGIN_SCANNER="${scanner}" GST_REGISTRY="${registry}" \
+        ./gst-inspect-slimcheck.exe 2>/dev/null) || true
   rm -f "${inspect}"
-  echo "${out}" | grep 'Total count' | grep -o '[0-9][0-9]*' | tr '\n' ' '
-  echo "${out}" | grep -o 'avdec_\(h264\|h265\|aac\|alac\)\b' | sort -u | tr '\n' ' '
+  rm -rf "${regdir}"
+  { echo "${out}" | grep 'Total count' | grep -o '[0-9][0-9]*' | tr '\n' ' '
+    echo "${out}" | grep -o 'avdec_\(h264\|h265\|aac\|alac\)\b' | sort -u | tr '\n' ' '; } || true
 }
 
 if ls "${SLIM_BIN}"/avcodec-*.dll >/dev/null 2>&1; then
   echo "==> Slim FFmpeg: checking ${SLIM_BIN}"
+  # Every FFmpeg DLL in the package needs its slim counterpart (same name = same version).
   match=1
-  for f in "${SLIM_BIN}"/*.dll; do
-    [ -f "${DIST_DIR}/$(basename "${f}")" ] || { echo "    ! $(basename "${f}") is not in the package (version mismatch)"; match=0; }
+  SLIM_DLLS=()
+  for f in "${DIST_DIR}"/av*.dll "${DIST_DIR}"/sw*.dll "${DIST_DIR}"/postproc*.dll; do
+    [ -f "${f}" ] || continue
+    n=$(basename "${f}")
+    if [ -f "${SLIM_BIN}/${n}" ]; then SLIM_DLLS+=("${n}")
+    else echo "    ! no slim ${n} (FFmpeg version mismatch)"; match=0; fi
   done
+  [ "${#SLIM_DLLS[@]}" -gt 0 ] || match=0
   before=$(gst_inventory)
   echo "    before: ${before:-gst-inspect could not run}"
   if [ "${match}" = 1 ] && [ -n "${before}" ]; then
     BACKUP="$(mktemp -d)"
-    for f in "${SLIM_BIN}"/*.dll; do
-      n=$(basename "${f}")
+    for n in "${SLIM_DLLS[@]}"; do
       mv "${DIST_DIR}/${n}" "${BACKUP}/${n}"
-      cp "${f}" "${DIST_DIR}/${n}"
+      cp "${SLIM_BIN}/${n}" "${DIST_DIR}/${n}"
     done
     # Keep only DLLs reachable from the programs and plugins (dnssd.dll is loaded at run time).
     declare -A NEED=([dnssd.dll]=1)
@@ -272,7 +282,7 @@ if ls "${SLIM_BIN}"/avcodec-*.dll >/dev/null 2>&1; then
     else
       echo "::warning::slim FFmpeg check failed; keeping the full FFmpeg"
       echo "    ! check failed; restoring the full FFmpeg"
-      for n in "${SLIM_BIN}"/*.dll; do rm -f "${DIST_DIR}/$(basename "${n}")"; done
+      for n in "${SLIM_DLLS[@]}"; do rm -f "${DIST_DIR}/${n}"; done
       mv "${BACKUP}"/*.dll "${DIST_DIR}/"
     fi
     rm -rf "${BACKUP}"
