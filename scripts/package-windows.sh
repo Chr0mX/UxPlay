@@ -203,6 +203,87 @@ if [ -d "${BEACON_DIR}" ]; then
   cp "${BEACON_DIR}/uxplay_beacon_module_winrt.py" "${DIST_DIR}/" 2>/dev/null || true
 fi
 
+# ── Slim FFmpeg: keep only what UxPlay uses ──────────────────────────────────
+# MSYS2's FFmpeg pulls in ~90 libraries UxPlay never uses (video encoders,
+# subtitle rendering, speech recognition, ...). scripts/build-ffmpeg-slim.sh
+# builds the same FFmpeg version with only the decoders UxPlay needs. Swap it in,
+# drop every DLL nothing imports any more, and prove with gst-inspect (run from
+# the package, with only Windows on PATH) that every plugin and element still
+# loads and that the libav decoders UxPlay uses are there. On any doubt the full
+# FFmpeg set is restored.
+SLIM_BIN="${FFMPEG_SLIM_PREFIX:-/opt/ffmpeg-slim}/bin"
+
+dll_imports() {   # lower-case DLL names a PE file imports
+  objdump -p "$1" 2>/dev/null | awk '/DLL Name:/ {print tolower($3)}'
+}
+
+gst_inventory() {   # "<plugins> <features>" plus the libav decoder names, or empty if it cannot run
+  local inspect="${DIST_DIR}/gst-inspect-slimcheck.exe" reg out
+  cp "${UCRT64_BIN}/gst-inspect-1.0.exe" "${inspect}" || return 0
+  reg="$(mktemp -d)/registry.bin"
+  out=$(cd "${DIST_DIR}" && PATH="/c/Windows/System32:/c/Windows" \
+        GST_PLUGIN_PATH="$(cygpath -w "${DIST_DIR}/gst-plugins")" GST_PLUGIN_SYSTEM_PATH="" \
+        GST_PLUGIN_SCANNER="$(cygpath -w "${DIST_DIR}/gst-plugin-scanner.exe")" \
+        GST_REGISTRY="$(cygpath -w "${reg}")" ./gst-inspect-slimcheck.exe 2>/dev/null)
+  rm -f "${inspect}"
+  echo "${out}" | grep 'Total count' | grep -o '[0-9][0-9]*' | tr '\n' ' '
+  echo "${out}" | grep -o 'avdec_\(h264\|h265\|aac\|alac\)\b' | sort -u | tr '\n' ' '
+}
+
+if ls "${SLIM_BIN}"/avcodec-*.dll >/dev/null 2>&1; then
+  echo "==> Slim FFmpeg: checking ${SLIM_BIN}"
+  match=1
+  for f in "${SLIM_BIN}"/*.dll; do
+    [ -f "${DIST_DIR}/$(basename "${f}")" ] || { echo "    ! $(basename "${f}") is not in the package (version mismatch)"; match=0; }
+  done
+  before=$(gst_inventory)
+  echo "    before: ${before:-gst-inspect could not run}"
+  if [ "${match}" = 1 ] && [ -n "${before}" ]; then
+    BACKUP="$(mktemp -d)"
+    for f in "${SLIM_BIN}"/*.dll; do
+      n=$(basename "${f}")
+      mv "${DIST_DIR}/${n}" "${BACKUP}/${n}"
+      cp "${f}" "${DIST_DIR}/${n}"
+    done
+    # Keep only DLLs reachable from the programs and plugins (dnssd.dll is loaded at run time).
+    declare -A NEED=([dnssd.dll]=1)
+    queue=("${DIST_DIR}/uxplay.exe" "${DIST_DIR}/uxplay-gui.exe" "${DIST_DIR}/gst-plugin-scanner.exe" \
+           "${DIST_DIR}"/gst-plugins/*.dll)
+    while [ "${#queue[@]}" -gt 0 ]; do
+      f="${queue[0]}"; queue=("${queue[@]:1}")
+      [ -f "${f}" ] || continue
+      for d in $(dll_imports "${f}"); do
+        [ -n "${NEED[$d]:-}" ] && continue
+        actual=$(find "${DIST_DIR}" -maxdepth 1 -iname "${d}" | head -1)
+        [ -n "${actual}" ] || continue   # system DLL
+        NEED[$d]=1
+        queue+=("${actual}")
+      done
+    done
+    removed=0
+    for f in "${DIST_DIR}"/*.dll; do
+      n=$(basename "${f}")
+      if [ -z "${NEED[${n,,}]:-}" ]; then mv "${f}" "${BACKUP}/"; removed=$((removed + 1)); fi
+    done
+    after=$(gst_inventory)
+    echo "    after:  ${after:-gst-inspect could not run}"
+    if [ -n "${after}" ] && [ "${after}" = "${before}" ] && [[ "${after}" == *avdec_h264* ]]; then
+      echo "    Slim FFmpeg in use: ${removed} unused DLLs removed"
+    else
+      echo "::warning::slim FFmpeg check failed; keeping the full FFmpeg"
+      echo "    ! check failed; restoring the full FFmpeg"
+      for n in "${SLIM_BIN}"/*.dll; do rm -f "${DIST_DIR}/$(basename "${n}")"; done
+      mv "${BACKUP}"/*.dll "${DIST_DIR}/"
+    fi
+    rm -rf "${BACKUP}"
+  else
+    echo "    ! not used (see above); keeping the full FFmpeg"
+  fi
+else
+  echo "==> Slim FFmpeg not built; keeping MSYS2's full FFmpeg"
+fi
+echo "==> Package size: $(du -sh "${DIST_DIR}" | cut -f1)"
+
 # ── Write user README ─────────────────────────────────────────────────────────
 cat > "${DIST_DIR}/README.md" << READMEEOF
 # UxPlay ${VERSION} for Windows

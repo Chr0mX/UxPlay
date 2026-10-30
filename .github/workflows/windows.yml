@@ -29,6 +29,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up MSYS2 UCRT64
+        id: msys2
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -47,6 +48,8 @@ jobs:
             mingw-w64-ucrt-x86_64-gst-plugins-ugly
             mingw-w64-ucrt-x86_64-gst-libav
             mingw-w64-ucrt-x86_64-ntldd
+            mingw-w64-ucrt-x86_64-nasm
+            make
             zip
 
       - name: Acquire Bonjour dnssd.dll
@@ -135,6 +138,21 @@ jobs:
 
       - name: Build
         run: cmake --build build --config Release
+
+      # Smaller download: the same FFmpeg version as MSYS2's, with only the
+      # decoders UxPlay uses (see scripts/build-ffmpeg-slim.sh). Cached per version.
+      - name: FFmpeg version
+        id: ffver
+        run: echo "v=$(pacman -Q mingw-w64-ucrt-x86_64-ffmpeg | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache slim FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.msys2.outputs.msys2-location }}/opt/ffmpeg-slim
+          key: ffmpeg-slim-${{ steps.ffver.outputs.v }}-${{ hashFiles('scripts/build-ffmpeg-slim.sh') }}
+
+      - name: Build slim FFmpeg
+        run: bash scripts/build-ffmpeg-slim.sh
 
       - name: Package portable ZIP
         run: bash scripts/package-windows.sh
