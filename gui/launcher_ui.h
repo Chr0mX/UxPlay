@@ -62,6 +62,19 @@ struct UiFonts {
     ImFont* mono   = nullptr;   // command line, flags, console
 };
 
+// Apple Bonjour (needed for discovery) as the host reports it. The host
+// detects, downloads and installs it; the UI only shows state and actions.
+struct BonjourView {
+    enum State { Hidden, Missing, Working, Failed, JustInstalled };
+    State       state   = Hidden;
+    int         percent = -1;          // download progress, -1 = indeterminate
+    std::string message;               // Working / JustInstalled: current step
+    std::string error;                 // Failed: what went wrong
+    bool        canRunInteractive = false;   // Apple's installer is downloaded
+    const char* installerUrl = "";     // manual download
+    const char* supportUrl   = "";     // Apple Support article
+};
+
 // Operations the UI needs from the host platform. Every menu item and button
 // calls one of these; the UI never manages processes or files itself.
 struct UiHost {
@@ -83,6 +96,12 @@ struct UiHost {
     bool (*folderIsDefault)(int which);
     int  (*chooseFolder)(int which, std::string* message);   // 1 changed, 0 cancelled, -1 failed
     void (*resetFolder)(int which);
+    // Bonjour
+    void (*bonjourStatus)(BonjourView* out);
+    void (*bonjourInstall)(bool interactive);   // false: automatic (silent); true: Apple's own installer
+    bool (*bonjourRecheck)();                   // "I installed it": detect again; true if found
+    void (*bonjourDismiss)();                   // hide the "installed" confirmation
+    void (*openUrl)(const char* url);
 };
 
 struct UiState {

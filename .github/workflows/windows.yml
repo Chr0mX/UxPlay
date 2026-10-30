@@ -120,8 +120,8 @@ jobs:
       - name: Determine version
         id: ver
         run: |
-          VERSION=$(grep -m1 'set.*UXPLAY_VERSION\|project.*VERSION' "CMakeLists.txt" \
-            | grep -oP '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1 || true)
+          # Same source as the launcher's About box: #define VERSION "x.y.z" in uxplay.cpp
+          VERSION=$(grep -m1 '^#define VERSION' uxplay.cpp | grep -oP '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1 || true)
           if [ -z "${VERSION}" ]; then
             VERSION=$(git describe --tags --abbrev=0 2>/dev/null | tr -d 'v' || echo "dev")
           fi
@@ -164,7 +164,7 @@ jobs:
             exit 1
           }
           Write-Host "Building installer with NSIS: $makensis (version $version)"
-          & $makensis /DVERSION="$version" "scripts\uxplay-installer.nsi"
+          & $makensis /INPUTCHARSET UTF8 /DVERSION="$version" "scripts\uxplay-installer.nsi"
           if ($LASTEXITCODE -ne 0) {
             Write-Error "NSIS build failed (exit $LASTEXITCODE)"
             exit 1

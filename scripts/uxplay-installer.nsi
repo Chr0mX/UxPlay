@@ -1,4 +1,5 @@
-; UxPlay Windows Installer
+﻿; UxPlay Windows Installer
+; Saved as UTF-8 with a BOM so makensis reads the non-ASCII text (em dashes) correctly.
 ; Built with NSIS (Nullsoft Scriptable Install System)
 ; Invoke: makensis /DVERSION=x.y.z scripts\uxplay-installer.nsi
 ;         (run from repo root so File paths resolve correctly)
@@ -20,6 +21,9 @@
 !define UNINST_REG   "Software\Microsoft\Windows\CurrentVersion\Uninstall\UxPlay"
 
 Unicode True
+; Sharp text on high-DPI displays (otherwise Windows bitmap-scales the wizard).
+ManifestDPIAware true
+ManifestSupportedOS all
 SetCompressor /SOLID lzma
 
 Name           "${PRODUCT_NAME} ${PRODUCT_VER}"
@@ -32,18 +36,26 @@ ShowInstDetails show
 ; ── Pages ─────────────────────────────────────────────────────────────────────
 !include "MUI2.nsh"
 !include "WinVer.nsh"
+!include "LogicLib.nsh"
 
 !define MUI_ABORTWARNING
 ; Same artwork as the app (embedded in uxplay-gui.exe and uxplay.exe)
 !define MUI_ICON   "gui\uxplay.ico"
 !define MUI_UNICON "gui\uxplay.ico"
+; Branded artwork, drawn at 2x so it stays crisp when scaled for high DPI
+!define MUI_WELCOMEFINISHPAGE_BITMAP   "gui\installer\welcome.bmp"
+!define MUI_UNWELCOMEFINISHPAGE_BITMAP "gui\installer\welcome.bmp"
+!define MUI_HEADERIMAGE
+!define MUI_HEADERIMAGE_RIGHT
+!define MUI_HEADERIMAGE_BITMAP         "gui\installer\header.bmp"
+!define MUI_HEADERIMAGE_UNBITMAP       "gui\installer\header.bmp"
 !define MUI_WELCOMEPAGE_TEXT \
   "This wizard will install UxPlay ${PRODUCT_VER} on your computer.$\r$\n$\r$\n\
 UxPlay turns your PC into an AirPlay receiver. Stream your iPhone or iPad \
 screen directly to Windows — no Apple TV required.$\r$\n$\r$\n\
 All required runtimes (GStreamer, OpenSSL, libplist) are bundled. \
-Apple Bonjour is required for device discovery — the installer will check \
-for it and guide you if it is missing.$\r$\n$\r$\nClick Next to continue."
+Apple Bonjour is required for device discovery — if it is missing, \
+setup downloads and installs it from Apple.$\r$\n$\r$\nClick Next to continue."
 
 Var SettingsDir
 Var LogDir
@@ -133,6 +145,31 @@ Section "UxPlay (required)" SEC_MAIN
 
 SectionEnd
 
+; ── Apple Bonjour ─────────────────────────────────────────────────────────────
+; Needed so iPhone/iPad can discover UxPlay. If the Bonjour service is missing,
+; uxplay-gui.exe downloads Apple's installer, checks its signature, installs
+; Bonjour silently and shows progress (with retry and manual-download links if
+; that fails). Nothing is downloaded when Bonjour is already installed.
+Section "Apple Bonjour" SEC_BONJOUR
+  SectionIn RO
+  ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Services\Bonjour Service" "ImagePath"
+  ${If} $0 != ""
+    DetailPrint "Apple Bonjour is already installed."
+    Return
+  ${EndIf}
+  DetailPrint "Apple Bonjour is not installed: downloading and installing it from Apple..."
+  ${If} ${Silent}
+    ExecWait '"$INSTDIR\uxplay-gui.exe" --install-bonjour --quiet' $1
+  ${Else}
+    ExecWait '"$INSTDIR\uxplay-gui.exe" --install-bonjour' $1
+  ${EndIf}
+  ${If} $1 == 0
+    DetailPrint "Apple Bonjour installed."
+  ${Else}
+    DetailPrint "Apple Bonjour was not installed. UxPlay can install it later (Connection page)."
+  ${EndIf}
+SectionEnd
+
 ; ── Minimum OS check ──────────────────────────────────────────────────────────
 Function .onInit
   ; Defaults for the folder pages (per-user locations; same as the launcher's defaults)
@@ -146,22 +183,6 @@ Function .onInit
     MessageBox MB_ICONSTOP "UxPlay requires Windows 10 or later."
     Abort
   ${EndIf}
-FunctionEnd
-
-; ── Post-install: warn if Bonjour is absent ───────────────────────────────────
-Function .onInstSuccess
-  ; dnssd.dll in System32 or Program Files means Bonjour is installed
-  IfFileExists "$WINDIR\System32\dnssd.dll"      bonjour_ok
-  IfFileExists "$INSTDIR\dnssd.dll"              bonjour_ok
-  IfFileExists "$PROGRAMFILES\Bonjour\dnssd.dll" bonjour_ok
-    MessageBox MB_ICONINFORMATION|MB_OK \
-      "Apple Bonjour was not detected on this system.$\r$\n$\r$\n\
-Bonjour is required for UxPlay to appear in your iPhone/iPad AirPlay list. \
-It is included with iTunes, iCloud for Windows, and the Apple TV app.$\r$\n$\r$\n\
-You can also install the free standalone $\"Bonjour Print Services for Windows$\" \
-from Apple.$\r$\n$\r$\nUxPlay will start but will NOT be discoverable until \
-Bonjour is installed and running."
-  bonjour_ok:
 FunctionEnd
 
 ; ── Uninstaller ───────────────────────────────────────────────────────────────

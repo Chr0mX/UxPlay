@@ -22,7 +22,7 @@ UxPlay runs natively on Windows 10 and 11 (64-bit) using GStreamer for audio/vid
 
 1. Download the latest `uxplay-windows-<version>.zip` from the [Releases](../../../releases) page.
 2. Extract to any folder (e.g. `C:\UxPlay`).
-3. **Install Bonjour** if not already present (see [Prerequisites](#prerequisites)).
+3. **Bonjour:** open `uxplay-gui.exe`; if Bonjour is missing it installs it for you (see [Prerequisites](#prerequisites)).
 4. Double-click **`uxplay.bat`** or open a Command Prompt in the folder and run:
    ```
    uxplay.bat
@@ -38,7 +38,18 @@ UxPlay runs natively on Windows 10 and 11 (64-bit) using GStreamer for audio/vid
 
 UxPlay uses Apple's mDNS/DNS-SD protocol for AirPlay device discovery. The Bonjour service (`mDNSResponder`) must be running on Windows.
 
-Bonjour is automatically installed by:
+**The UxPlay installer and the UxPlay window install Bonjour for you.** If the
+Bonjour Service is missing, UxPlay downloads Apple's
+[Bonjour Print Services installer](https://download.info.apple.com/Mac_OS_X/061-8098.20100603.gthyu/BonjourPSSetup.exe),
+checks that it is Apple's signed file, and installs the Bonjour service silently
+(Windows asks for administrator permission). Progress and errors are shown in the
+setup dialog or in a card at the top of the UxPlay window, with **Try again**,
+**Open Apple's installer** and **Check again** buttons. Nothing is downloaded when
+Bonjour is already installed. If the automatic install fails, install it yourself
+from the link above (see also [Apple Support — Bonjour](https://support.apple.com/en-us/106380))
+and choose **Check again**.
+
+Bonjour is also installed by:
 - **iTunes for Windows**
 - **iCloud for Windows**
 - **Apple TV app**

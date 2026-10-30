@@ -73,8 +73,8 @@ ErrorInfo DescribeErrorKind(const std::string& kind) {
     if (kind == "bonjour") {
         e.title  = "Device discovery is unavailable";
         e.detail = "UxPlay could not reach the Bonjour (mDNS) service, so iPhone and iPad cannot find this PC.";
-        e.hint   = "Install Apple's \"Bonjour Print Services for Windows\" (or iTunes), make sure the "
-                   "Bonjour Service is running, then try again.";
+        e.hint   = "Install Apple Bonjour (use Install Bonjour below, or Apple's \"Bonjour Print Services "
+                   "for Windows\"), make sure the Bonjour Service is running, then try again.";
     } else if (kind == "name-conflict") {
         e.title  = "Server name already in use";
         e.detail = "Another AirPlay receiver on the network is advertising the same name.";

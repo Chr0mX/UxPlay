@@ -232,8 +232,9 @@ UxPlay turns your PC into an AirPlay receiver: mirror an iPhone, iPad or Mac scr
 
 ## Quick start
 
-1. Install **Apple Bonjour** if it is not already installed. It comes with iTunes, iCloud for
-   Windows and the Apple TV app, or as the standalone *Bonjour Print Services for Windows*.
+1. **Apple Bonjour** is required. If it is missing, UxPlay downloads it from Apple and installs
+   it for you (approve the Windows permission prompt). It also comes with iTunes, iCloud for
+   Windows and the Apple TV app.
 2. Open **UxPlay** (\`uxplay-gui.exe\`) and press **Start**. Allow it through Windows Firewall if asked.
 3. On your iPhone or iPad, open **Control Center → Screen Mirroring** and pick the name UxPlay shows.
 

@@ -43,6 +43,7 @@
 #include <string>
 #include <vector>
 #include <deque>
+#include <atomic>
 #include <mutex>
 #include <fstream>
 #include <sstream>
@@ -51,6 +52,7 @@
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
 #include "launcher_ui.h"
+#include "bonjour_win.h"
 #include "resource.h"
 
 #ifndef UXPLAY_LAUNCHER_VERSION
@@ -611,6 +613,7 @@ struct PlayerWin {
     bool   pending = false;      // user resize waiting to be aspect-corrected
 };
 static PlayerWin g_player[kMaxReceivers];
+static std::atomic<HWND> g_playerHwnd[kMaxReceivers];   // copy of g_player[i].hwnd for the mouse-hook thread
 
 static bool SameRect(const RECT& a, const RECT& b)
 {
@@ -667,6 +670,7 @@ static void ManagePlayerWindows()
         if (h != pw.hwnd) {   // new window (stream started) or gone
             pw = PlayerWin();
             pw.hwnd = h;
+            g_playerHwnd[i] = h;
             if (h) {
                 SendMessageTimeoutW(h, WM_SETICON, ICON_BIG,   (LPARAM)g_iconBig,   SMTO_ABORTIFHUNG, 200, NULL);
                 SendMessageTimeoutW(h, WM_SETICON, ICON_SMALL, (LPARAM)g_iconSmall, SMTO_ABORTIFHUNG, 200, NULL);
@@ -697,20 +701,32 @@ static void ManagePlayerWindows()
     }
 }
 
+// The right-click menu needs a system-wide low-level mouse hook. Windows calls a
+// WH_MOUSE_LL hook on the thread that installed it, for EVERY mouse event on the
+// PC, and holds the event until that thread answers. It used to live on the UI
+// thread, which spends most of each frame rendering and waiting for vsync
+// (Present) — so while a receiver ran, every mouse move on the whole desktop
+// waited for the launcher's frame, and dragging a player window made the PC
+// feel laggy. The hook now runs on a dedicated, high-priority thread that does
+// nothing but answer it; the menu itself is still shown on the UI thread.
+
 static int PlayerIndexAt(POINT pt)
 {
     HWND top = GetAncestor(WindowFromPoint(pt), GA_ROOT);
     for (int i = 0; i < kMaxReceivers; ++i)
-        if (top && g_player[i].hwnd == top) return i;
+        if (top && g_playerHwnd[i].load() == top) return i;
     return -1;
 }
 
 #define WM_APP_PLAYERMENU (WM_APP + 4)
-static HWND  g_menuOwner = NULL;
-static HHOOK g_mouseHook = NULL;
+static HWND   g_menuOwner = NULL;
+static HHOOK  g_mouseHook = NULL;       // owned by the hook thread
+static HANDLE g_hookThread = NULL;
+static DWORD  g_hookThreadId = 0;
 
 static LRESULT CALLBACK MouseHookProc(int code, WPARAM wp, LPARAM lp)
 {
+    // Only right-button events do any work; everything else returns at once.
     if (code == HC_ACTION && (wp == WM_RBUTTONDOWN || wp == WM_RBUTTONUP)) {
         const MSLLHOOKSTRUCT* m = reinterpret_cast<const MSLLHOOKSTRUCT*>(lp);
         int i = PlayerIndexAt(m->pt);
@@ -720,14 +736,42 @@ static LRESULT CALLBACK MouseHookProc(int code, WPARAM wp, LPARAM lp)
             return 1;   // the player itself has no right-click use; keep it from seeing the click
         }
     }
-    return CallNextHookEx(g_mouseHook, code, wp, lp);
+    return CallNextHookEx(NULL, code, wp, lp);
 }
 
+static DWORD WINAPI MouseHookThread(LPVOID ready)
+{
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+    MSG msg;
+    PeekMessageW(&msg, NULL, WM_USER, WM_USER, PM_NOREMOVE);   // create the queue before signalling
+    g_mouseHook = SetWindowsHookExW(WH_MOUSE_LL, MouseHookProc, GetModuleHandleW(NULL), 0);
+    SetEvent((HANDLE)ready);
+    while (GetMessageW(&msg, NULL, 0, 0) > 0) DispatchMessageW(&msg);   // hook calls arrive here
+    if (g_mouseHook) { UnhookWindowsHookEx(g_mouseHook); g_mouseHook = NULL; }
+    return 0;
+}
+
+static void StopMouseHook()
+{
+    if (!g_hookThread) return;
+    PostThreadMessageW(g_hookThreadId, WM_QUIT, 0, 0);
+    WaitForSingleObject(g_hookThread, 2000);
+    CloseHandle(g_hookThread);
+    g_hookThread = NULL;
+    g_hookThreadId = 0;
+}
+
+// Installed only while a receiver runs.
 static void UpdateMouseHook()
 {
     bool want = IsUxPlayRunning();
-    if (want && !g_mouseHook)  g_mouseHook = SetWindowsHookExW(WH_MOUSE_LL, MouseHookProc, GetModuleHandleW(NULL), 0);
-    if (!want && g_mouseHook) { UnhookWindowsHookEx(g_mouseHook); g_mouseHook = NULL; }
+    if (want && !g_hookThread) {
+        HANDLE ready = CreateEventW(NULL, TRUE, FALSE, NULL);
+        g_hookThread = CreateThread(NULL, 0, MouseHookThread, ready, 0, &g_hookThreadId);
+        if (g_hookThread) WaitForSingleObject(ready, 2000);
+        CloseHandle(ready);
+    }
+    if (!want && g_hookThread) StopMouseHook();
 }
 
 static void ShowPlayerMenu(int i, POINT pt)
@@ -1094,6 +1138,76 @@ static void OpenPath(const std::wstring& p)
     if ((INT_PTR)r <= 32) g_log.Write("WARN", "app", "Could not open " + Utf8(p));
 }
 
+// ── Bonjour ───────────────────────────────────────────────────────────────────
+// Detection on startup; if missing, the automatic install starts by itself (it
+// downloads only when Bonjour is not installed). The UI card shows progress,
+// failures with retry / manual links, and a confirmation once it is installed.
+
+static bool g_bonjourWasBusy = false;
+static bool g_bonjourJustInstalled = false;
+
+static void HostBonjourStatus(BonjourView* out)
+{
+    bonjour::Status st = bonjour::Snapshot();
+    out->percent = st.percent;
+    out->message = st.message;
+    out->error = st.error;
+    out->canRunInteractive = st.canRunInteractive;
+    out->installerUrl = bonjour::kInstallerUrl;
+    out->supportUrl = bonjour::kSupportUrl;
+    switch (st.state) {
+    case bonjour::State::Missing:     out->state = BonjourView::Missing; break;
+    case bonjour::State::Downloading:
+    case bonjour::State::Installing:  out->state = BonjourView::Working; break;
+    case bonjour::State::Failed:      out->state = BonjourView::Failed;  break;
+    case bonjour::State::Installed:   out->state = g_bonjourJustInstalled ? BonjourView::JustInstalled : BonjourView::Hidden; break;
+    default:                          out->state = BonjourView::Hidden;  break;
+    }
+}
+
+static void HostBonjourInstall(bool interactive)
+{
+    g_log.Write("INFO", "bonjour", interactive ? "Opening Apple's Bonjour installer" : "Installing Bonjour automatically");
+    bonjour::StartInstall(interactive);
+    g_bonjourWasBusy = true;
+}
+
+static bool HostBonjourRecheck()
+{
+    bool was = bonjour::Snapshot().state == bonjour::State::Installed;
+    bonjour::Refresh();
+    bool ok = bonjour::Snapshot().state == bonjour::State::Installed;
+    if (ok && !was) { g_bonjourJustInstalled = true; g_log.Write("INFO", "bonjour", "Bonjour detected"); }
+    return ok;
+}
+
+static void HostBonjourDismiss() { g_bonjourJustInstalled = false; }
+
+static void HostOpenUrl(const char* url)
+{
+    ShellExecuteW(NULL, L"open", Wide(url).c_str(), NULL, NULL, SW_SHOWNORMAL);
+}
+
+// Called every loop iteration: logs the outcome of an install and restarts
+// running receivers so they register with the freshly installed service.
+static void PollBonjour()
+{
+    if (!g_bonjourWasBusy || bonjour::Busy()) return;
+    g_bonjourWasBusy = false;
+    bonjour::Status st = bonjour::Snapshot();
+    if (st.state == bonjour::State::Installed) {
+        g_bonjourJustInstalled = true;
+        g_log.Write("INFO", "bonjour", st.message.empty() ? "Bonjour installed" : st.message);
+        if (IsUxPlayRunning()) {
+            g_log.Write("INFO", "bonjour", "Restarting the receiver so it is discoverable");
+            StopUxPlay();
+            LaunchUxPlay(g_settings);
+        }
+    } else if (st.state == bonjour::State::Failed) {
+        g_log.Write("WARN", "bonjour", "Bonjour installation failed: " + st.error);
+    }
+}
+
 static void HostStart(const Settings& s)      { LaunchUxPlay(s); }
 static void HostStop()                        { StopUxPlay(); }
 static int  HostGetRotation()                 { return g_overlayRot; }
@@ -1290,6 +1404,23 @@ static UiFonts BuildFonts(float scale)
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
 {
+    // Setup helper: "uxplay-gui.exe --install-bonjour [--quiet]" (run by the
+    // installer) installs Apple Bonjour with a progress dialog and exits.
+    {
+        int argc = 0;
+        LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+        bool setup = false, quiet = false;
+        for (int i = 1; argv && i < argc; ++i) {
+            if (!lstrcmpiW(argv[i], L"--install-bonjour")) setup = true;
+            if (!lstrcmpiW(argv[i], L"--quiet")) quiet = true;
+        }
+        if (argv) LocalFree(argv);
+        if (setup) {
+            ImGui_ImplWin32_EnableDpiAwareness();   // crisp dialog on high-DPI displays
+            return bonjour::RunSetupDialog(quiet);
+        }
+    }
+
     // One launcher at a time: a second start brings the first one forward
     // instead of starting a second receiver.
     HANDLE single = CreateMutexW(NULL, TRUE, L"Local\\UxPlayLauncher.SingleInstance");
@@ -1415,7 +1546,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         HostOpenLogFile, HostOpenLogFolder, HostOpenSettingsFolder, HostOpenDocs, HostExit,
         HostThemeApplied, HostLogStatus,
         HostFolderPath, HostFolderIsDefault, HostChooseFolder, HostResetFolder,
+        HostBonjourStatus, HostBonjourInstall, HostBonjourRecheck, HostBonjourDismiss, HostOpenUrl,
     };
+
+    // Bonjour: detect once; install automatically when it is missing.
+    bonjour::SetOwnerWindow(hwnd);
+    bonjour::Refresh();
+    if (bonjour::Snapshot().state == bonjour::State::Missing) {
+        g_log.Write("WARN", "bonjour", "Bonjour is not installed; installing it automatically");
+        HostBonjourInstall(false);
+    } else {
+        g_log.Write("INFO", "bonjour", "Bonjour is installed");
+    }
 
     ShowWindow(hwnd, g_prefs.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL);
     UpdateWindow(hwnd);
@@ -1448,6 +1590,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             PollProcess();
             UpdateReceiverPool(g_settings);
             UpdateMouseHook();
+            PollBonjour();
             ManagePlayerWindows();
             if (g_inTray) {
                 std::wstring tip = IsUxPlayRunning() ? L"UxPlay \x2014 " + Wide(PhaseLabel(g_sessions[0].phase)) : L"UxPlay";
@@ -1487,6 +1630,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         }
         UpdateReceiverPool(g_settings);
         UpdateMouseHook();
+        PollBonjour();
         if (g_now - lastBrand > 0.1) { lastBrand = g_now; ManagePlayerWindows(); }
 
         DrawLauncherUI(g_settings, g_ui, g_sessions, g_rxCount, g_prefs, host, fonts);   // sessions of the current/last run
@@ -1507,7 +1651,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         uint64_t lines = 0;
         for (int i = 0; i < kMaxReceivers; ++i) lines += g_sessions[i].linesAdded;
         if (lines != lastLines) { lastLines = lines; lastActivity = g_now; }
-        bool busy = g_ui.animating || g_dpiChanged || ImGui::IsAnyItemActive() ||
+        bool busy = g_ui.animating || bonjour::Busy() || g_dpiChanged || ImGui::IsAnyItemActive() ||
                     ImGui::IsMouseDown(ImGuiMouseButton_Left) || g_now - lastActivity < 0.5;
         if (pr == DXGI_STATUS_OCCLUDED)
             MsgWaitForMultipleObjects(0, NULL, FALSE, 250, QS_ALLINPUT);   // window covered: nothing visible
@@ -1523,7 +1667,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     SavePrefs(false);   // geometry was captured in WM_DESTROY
     SetOverlayRotation(0);
     StopUxPlay();
-    if (g_mouseHook) { UnhookWindowsHookEx(g_mouseHook); g_mouseHook = NULL; }
+    StopMouseHook();
     if (g_menuOwner) DestroyWindow(g_menuOwner);
     g_log.Write("INFO", "app", "Launcher exiting");
     g_log.Close();

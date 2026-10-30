@@ -23,6 +23,7 @@ endif()
 
 add_executable(uxplay-gui WIN32
   uxplay-gui.cpp
+  bonjour_win.cpp
   launcher_ui.cpp
   session.cpp
   prefs.cpp
@@ -41,7 +42,8 @@ target_include_directories(uxplay-gui PRIVATE
   ${imgui_SOURCE_DIR}/backends
 )
 
-target_link_libraries(uxplay-gui PRIVATE d3d11 dxgi d3dcompiler dwmapi gdi32 user32 shell32 ole32 advapi32)
+target_link_libraries(uxplay-gui PRIVATE d3d11 dxgi d3dcompiler dwmapi gdi32 user32 shell32 ole32 advapi32
+                      wininet wintrust crypt32 setupapi)
 target_compile_definitions(uxplay-gui PRIVATE
   UNICODE _UNICODE
   $<$<COMPILE_LANGUAGE:CXX>:UXPLAY_LAUNCHER_VERSION="${UXPLAY_VERSION}">
