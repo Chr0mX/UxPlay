@@ -1,6 +1,51 @@
-# UxPlay 1.73: AirPlay-Mirror and AirPlay-Audio server for Linux, macOS, and Unix (also runs on Windows).
+# UxPlay for Windows: AirPlay mirroring and audio receiver
 
-### **Now developed at the GitHub site <https://github.com/FDH2/UxPlay> (where ALL user issues should be posted, and latest versions can be found).**
+Mirror an iPhone, iPad or Mac screen, with sound, to a Windows 10 or 11 PC. This is a fork of
+[FDH2/UxPlay](https://github.com/FDH2/UxPlay) that adds a native Windows app around the UxPlay
+receiver engine.
+
+**[Website](https://chr0mx.github.io/UxPlay/)** · **[Download (Releases)](https://github.com/Chr0mX/UxPlay/releases)**
+
+## What this fork adds (Windows)
+
+- **The UxPlay window** (`uxplay-gui.exe`): start and stop the receiver, live connection status
+  (who is connected, from where, for how long), errors explained with a *Try again* button, light
+  and dark themes, system tray, and a built-in console and log file instead of console windows.
+- **No Apple Bonjour needed.** UxPlay has its own lightweight device discovery (mDNS/DNS-SD,
+  RFC 6762/6763). Under *Connection → Device discovery* choose **UxPlay (built-in)** (default),
+  **Automatic** (Apple Bonjour if it is running, otherwise built-in) or **Apple Bonjour**.
+- **Several phones at once:** while one phone is mirroring, another receiver appears for the next
+  one, up to four, each in its own window.
+- **Player window:** fits the video's shape (no black bars) and keeps it when resized; right-click
+  it to rotate or refit.
+- **Installer** with a choice of settings and log folders, Start menu and desktop shortcuts and a
+  firewall rule; or use the portable ZIP.
+- `uxplay.exe` (the receiver engine) also runs directly from a Command Prompt with the usual
+  options below; it finds its bundled GStreamer by itself.
+
+### Getting started
+
+1. Download `uxplay-windows-installer.exe` (or the portable ZIP) from
+   [Releases](https://github.com/Chr0mX/UxPlay/releases) and run it.
+2. Open **UxPlay** and press **Start**. Allow it through Windows Firewall when asked.
+3. On your iPhone or iPad, open **Control Center → Screen Mirroring** and pick the name UxPlay shows.
+
+More: [docs/WINDOWS.md](docs/WINDOWS.md).
+
+### Credits and where to report issues
+
+The receiver engine is **UxPlay** by its upstream authors and contributors, developed at
+<https://github.com/FDH2/UxPlay> (GPL-3.0). Problems with the Windows app (window, installer,
+discovery, multiple phones) belong in [this repository's issues](https://github.com/Chr0mX/UxPlay/issues);
+problems with the engine itself on Linux, macOS or \*BSD belong upstream.
+
+---
+
+# Upstream UxPlay documentation
+
+*The rest of this file is the upstream UxPlay README (AirPlay-Mirror and AirPlay-Audio server for
+Linux, macOS, and Unix; also runs on Windows), developed at <https://github.com/FDH2/UxPlay>.*
+
 
 -  **NEW in v1.73, up to  v1.73.6** (March 2026):
 
@@ -921,6 +966,11 @@ and can be used on networks that don't allow DNS_SD.  See [instructions below](#
 ## Building UxPlay on Microsoft Windows, using MSYS2 with the MinGW-64 compiler.
 
 -   tested on Windows 10 and 11, 64-bit.
+
+> **This fork:** the packaged Windows build (installer / portable ZIP) does not need Apple Bonjour at
+> runtime: UxPlay uses its own built-in mDNS responder unless *Device discovery* is set to Apple
+> Bonjour. For building, the bundled `deps/windows/dns_sd.h` is enough; the Bonjour SDK below is
+> optional. See [docs/WINDOWS.md](docs/WINDOWS.md).
 
 1.  Download and install **Bonjour SDK for Windows v3.0**. You can
     download the SDK without any registration at

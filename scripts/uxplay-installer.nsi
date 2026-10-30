@@ -135,9 +135,11 @@ Section "UxPlay (required)" SEC_MAIN
   CreateDirectory "$SMPROGRAMS\UxPlay"
   CreateShortcut "$SMPROGRAMS\UxPlay\UxPlay.lnk" \
     "$INSTDIR\uxplay-gui.exe" "" "$INSTDIR\uxplay-gui.exe" 0
-  Delete "$SMPROGRAMS\UxPlay\UxPlay (command line).lnk"   ; renamed below
-  CreateShortcut "$SMPROGRAMS\UxPlay\UxPlay (command line, advanced).lnk" \
-    "$INSTDIR\uxplay.bat"
+  ; uxplay.bat is gone (uxplay.exe sets up GStreamer itself): remove it and its
+  ; shortcuts left by older versions
+  Delete "$INSTDIR\uxplay.bat"
+  Delete "$SMPROGRAMS\UxPlay\UxPlay (command line).lnk"
+  Delete "$SMPROGRAMS\UxPlay\UxPlay (command line, advanced).lnk"
   CreateShortcut "$SMPROGRAMS\UxPlay\Uninstall UxPlay.lnk" \
     "$INSTDIR\uninstall.exe"
 

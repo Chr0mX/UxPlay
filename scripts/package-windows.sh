@@ -178,27 +178,6 @@ else
   echo "==> dnssd.dll not found: UxPlay will use its built-in mDNS responder (Bonjour is optional)."
 fi
 
-# ── Create launcher batch script ──────────────────────────────────────────────
-cat > "${DIST_DIR}/uxplay.bat" << 'BATCHEOF'
-@echo off
-setlocal
-
-rem UxPlay launcher — sets GStreamer environment then starts uxplay.exe
-set "UXPLAY_DIR=%~dp0"
-
-rem Point GStreamer at the bundled plugins; store registry next to the exe
-rem so it rebuilds automatically when the package is run for the first time.
-set "GST_PLUGIN_PATH=%UXPLAY_DIR%gst-plugins"
-set "GST_PLUGIN_SCANNER=%UXPLAY_DIR%gst-plugin-scanner.exe"
-set "GST_REGISTRY=%UXPLAY_DIR%gstreamer-registry.bin"
-rem Prevent GStreamer from searching a non-existent system installation
-set "GST_PLUGIN_SYSTEM_PATH="
-set "PATH=%UXPLAY_DIR%;%PATH%"
-
-rem Pass all arguments through to uxplay.exe
-"%UXPLAY_DIR%uxplay.exe" %*
-BATCHEOF
-
 # ── Copy GUI launcher ─────────────────────────────────────────────────────────
 if [ -f "${BUILD_DIR}/gui/uxplay-gui.exe" ]; then
   cp "${BUILD_DIR}/gui/uxplay-gui.exe" "${DIST_DIR}/uxplay-gui.exe"
@@ -240,8 +219,7 @@ UxPlay turns your PC into an AirPlay receiver: mirror an iPhone, iPad or Mac scr
 | File | What it is |
 |---|---|
 | \`uxplay-gui.exe\` | **UxPlay: open this one.** The window with settings, status and the Start button. |
-| \`uxplay.exe\` | The receiver engine. UxPlay starts it for you in the background, one per phone; you never need to open it. Task Manager shows it as *UxPlay receiver engine*. |
-| \`uxplay.bat\` | Runs the engine from the command line with your own options (advanced). |
+| \`uxplay.exe\` | The receiver engine. UxPlay starts it for you in the background, one per phone; you never need to open it. Task Manager shows it as *UxPlay receiver engine*. It can also be run from a Command Prompt with your own options (advanced). |
 
 ## The UxPlay window
 
@@ -256,7 +234,8 @@ UxPlay turns your PC into an AirPlay receiver: mirror an iPhone, iPad or Mac scr
 
 ## Command line
 
-\`uxplay.bat\` runs the receiver directly with options, for example:
+Open a Command Prompt in this folder and run \`uxplay.exe\` with options, for example
+\`uxplay.exe -n "Living Room" -fs\`. It finds the bundled GStreamer by itself.
 
 | Option | Meaning |
 |---|---|

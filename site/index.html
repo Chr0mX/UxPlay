@@ -166,7 +166,7 @@
   <section id="features" aria-labelledby="features-title">
     <div class="wrap">
       <div class="eyebrow">Features</div>
-      <h2 id="features-title">Everything you need to mirror, now is on your screen</h2>
+      <h2 id="features-title">Everything you need to mirror your iPhone to your PC</h2>
       <p class="sub">A native Windows app that runs the UxPlay receiver for you and shows what is happening in real time.</p>
       <div class="grid">
         <div class="card"><div class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12H2.5V2.5h11V12H11"/><path d="M8 9l4 5.5H4z" fill="currentColor" stroke="none"/></svg></div>
@@ -177,10 +177,10 @@
           <h3>Live connection status</h3><p>See who is connected, from which address, what is streaming and for how long.</p></div>
         <div class="card"><div class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 8.5a5 5 0 1 0 1.5-3.6"/><path d="M2.5 2.5v3h3"/></svg></div>
           <h3>Rotate &amp; resize</h3><p>The player window fits the video's shape. Right-click it to rotate or refit — no reconnection needed.</p></div>
-        <div class="card"><div class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1.8L14.8 13.8H1.2z"/><path d="M8 6v3.5"/><circle cx="8" cy="11.7" r=".6" fill="currentColor"/></svg></div>
-          <h3>Errors you can act on</h3><p>Discovery blocked, a busy port, or a missing component? Get a clear explanation and a Try Again button to help you resolve the issue.</p></div>
+        <div class="card"><div class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2"/><path d="M4.6 11.4a4.8 4.8 0 0 1 0-6.8M11.4 4.6a4.8 4.8 0 0 1 0 6.8M2.4 13.6a8 8 0 0 1 0-11.2M13.6 2.4a8 8 0 0 1 0 11.2"/></svg></div>
+          <h3>No Bonjour needed</h3><p>UxPlay finds your iPhone with its own lightweight discovery: no Apple Bonjour, no iTunes, nothing extra to install. Prefer Bonjour? Pick it under <em>Device discovery</em>.</p></div>
         <div class="card"><div class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4.5 6L7 8l-2.5 2M8.5 10.5h3"/></svg></div>
-          <h3>Quiet by default</h3><p>No console windows. Output goes to a built-in console and a log file you can open any time.</p></div>
+          <h3>Clear and quiet</h3><p>No console windows. If something goes wrong, like blocked discovery or a busy port, you get a plain explanation and a Try again button; details are in the built-in console and log.</p></div>
       </div>
     </div>
   </section>
@@ -221,7 +221,9 @@
       <h2 id="faq-title">Common questions</h2>
       <p class="sub">More in the <a href="https://github.com/Chr0mX/UxPlay/blob/master/docs/WINDOWS.md">Windows guide</a>.</p>
       <details><summary>My PC doesn't show up in Screen Mirroring</summary>
-        <p>Check that Windows Firewall allows UxPlay (discovery uses UDP port 5353) and that your PC and phone are on the same network. Guest Wi-Fi often blocks device discovery. Apple Bonjour is not needed; if it is installed, UxPlay uses it instead of its own discovery.</p></details>
+        <p>Check that Windows Firewall allows UxPlay (discovery uses UDP port 5353) and that your PC and phone are on the same Wi-Fi network; guest Wi-Fi often blocks device discovery. Under <em>Connection → Device discovery</em>, try <em>UxPlay (built-in)</em>.</p></details>
+      <details><summary>Do I need Apple Bonjour or iTunes?</summary>
+        <p>No. UxPlay has its own device discovery, so nothing else needs to be installed. Under <em>Connection → Device discovery</em> you can choose <em>UxPlay (built-in)</em> (default: lightweight, runs only while receiving), <em>Automatic</em> (Apple Bonjour if it is running, otherwise built-in) or <em>Apple Bonjour</em>.</p></details>
       <details><summary>Why are there black bars around the picture?</summary>
         <p>UxPlay keeps the picture's proportions. The player window resizes itself to match the video, and keeps that shape when you resize it. Right-click the window and choose <em>Fit window to video</em> at any time, or rotate your phone to landscape.</p></details>
       <details><summary>Can two people mirror at the same time?</summary>
@@ -229,7 +231,7 @@
       <details><summary>Where are my settings and logs?</summary>
         <p>By default in <code>%APPDATA%\UxPlay</code> and <code>%LOCALAPPDATA%\UxPlay\logs</code>. You can choose different folders in the installer or under <em>Advanced → Storage</em>. Logs never contain your password.</p></details>
       <details><summary>Can I use the command line?</summary>
-        <p>Yes — <code>uxplay.bat</code> runs the receiver directly. Common options:</p>
+        <p>Yes. Open a Command Prompt in the UxPlay folder and run <code>uxplay.exe</code> with options; it finds its bundled components by itself. Common options:</p>
         <table class="table">
           <thead><tr><th>Option</th><th>What it does</th></tr></thead>
           <tbody>
