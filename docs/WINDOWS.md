@@ -43,8 +43,8 @@ Choose which one is used under **Connection → Device discovery**:
 
 | Setting | What it does |
 |---|---|
-| **Automatic** (default) | Apple Bonjour if its service is installed and running (it comes with iTunes, iCloud for Windows, the Apple Devices app or *Bonjour Print Services*), otherwise UxPlay's own. |
-| **UxPlay (built-in)** | Always UxPlay's own discovery. Lightweight: it runs inside `uxplay.exe` only while receiving, with no always-on service and nothing to install. |
+| **Automatic** | Apple Bonjour if its service is installed and running (it comes with iTunes, iCloud for Windows, the Apple Devices app or *Bonjour Print Services*), otherwise UxPlay's own. |
+| **UxPlay (built-in)** (default) | Always UxPlay's own discovery. Lightweight: it runs inside `uxplay.exe` only while receiving, with no always-on service and nothing to install. |
 | **Apple Bonjour** | Only Apple's Bonjour Service. If it is not installed or not running, UxPlay shows *Device discovery is unavailable*. |
 
 While a receiver runs, the same row shows which one is in use. From the command line,
@@ -230,6 +230,13 @@ This produces `uxplay-windows-<version>.zip` with all required DLLs bundled.
 ## GUI launcher (uxplay-gui.exe)
 
 The **UxPlay** shortcut opens `uxplay-gui.exe`, which configures and runs `uxplay.exe` for you.
+
+**Two programs, one app.** `uxplay-gui.exe` is the UxPlay window you open. `uxplay.exe` is the
+receiver engine (shown as *UxPlay receiver engine* in Task Manager); the window starts it in the
+background, one per phone, and stops it when you quit. They are separate so that each phone gets
+its own engine (several phones at once), a crash in one stream cannot close the window, engine
+updates from upstream UxPlay stay easy to merge, and `uxplay.exe`/`uxplay.bat` can still be used
+from the command line.
 
 - **No console window.** The receiver runs without a console. Its output goes to the in-app
   console (**View → Show Console**, `Ctrl+``) and to a log file. Hiding the console never stops the receiver.

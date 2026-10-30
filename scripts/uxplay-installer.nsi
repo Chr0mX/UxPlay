@@ -110,7 +110,8 @@ Section "UxPlay (required)" SEC_MAIN
   ; Firewall: allow inbound on all profiles
   ExecWait 'netsh advfirewall firewall delete rule name="UxPlay"'
   ExecWait 'netsh advfirewall firewall add rule name="UxPlay" \
-    dir=in action=allow program="$INSTDIR\uxplay.exe" enable=yes profile=any'
+    dir=in action=allow program="$INSTDIR\uxplay.exe" enable=yes profile=any \
+    description="UxPlay receiver engine (AirPlay)"'
 
   ; Registry entries
   WriteRegStr  HKLM "${INST_REG}" "InstallDir" "$INSTDIR"
@@ -134,7 +135,8 @@ Section "UxPlay (required)" SEC_MAIN
   CreateDirectory "$SMPROGRAMS\UxPlay"
   CreateShortcut "$SMPROGRAMS\UxPlay\UxPlay.lnk" \
     "$INSTDIR\uxplay-gui.exe" "" "$INSTDIR\uxplay-gui.exe" 0
-  CreateShortcut "$SMPROGRAMS\UxPlay\UxPlay (command line).lnk" \
+  Delete "$SMPROGRAMS\UxPlay\UxPlay (command line).lnk"   ; renamed below
+  CreateShortcut "$SMPROGRAMS\UxPlay\UxPlay (command line, advanced).lnk" \
     "$INSTDIR\uxplay.bat"
   CreateShortcut "$SMPROGRAMS\UxPlay\Uninstall UxPlay.lnk" \
     "$INSTDIR\uninstall.exe"

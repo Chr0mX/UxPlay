@@ -1,3 +1,43 @@
-// Icon for uxplay.exe (Explorer, and the taskbar entry of the player window).
+// Resources for uxplay.exe, the receiver engine: icon (Explorer, and the taskbar
+// entry of the player window) and version info. FileDescription is what Task
+// Manager shows, so the engine is recognisable as part of UxPlay, not a second app.
+#include <winver.h>
 #include "resource.h"
+
+#ifndef UXPLAY_VER_MAJOR
+#define UXPLAY_VER_MAJOR 0
+#define UXPLAY_VER_MINOR 0
+#define UXPLAY_VER_PATCH 0
+#endif
+#define UXPLAY_STR2(x) #x
+#define UXPLAY_STR(x)  UXPLAY_STR2(x)
+#define UXPLAY_VER_STRING UXPLAY_STR(UXPLAY_VER_MAJOR.UXPLAY_VER_MINOR.UXPLAY_VER_PATCH)
+
 IDI_UXPLAY ICON "uxplay.ico"
+
+1 VERSIONINFO
+FILEVERSION     UXPLAY_VER_MAJOR, UXPLAY_VER_MINOR, UXPLAY_VER_PATCH, 0
+PRODUCTVERSION  UXPLAY_VER_MAJOR, UXPLAY_VER_MINOR, UXPLAY_VER_PATCH, 0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName",      "UxPlay Contributors"
+      VALUE "FileDescription",  "UxPlay receiver engine"
+      VALUE "Comments",         "Started automatically by UxPlay (uxplay-gui.exe), one per phone. Can also be run from the command line."
+      VALUE "FileVersion",      UXPLAY_VER_STRING
+      VALUE "InternalName",     "uxplay"
+      VALUE "LegalCopyright",   "GNU GPL v3"
+      VALUE "OriginalFilename", "uxplay.exe"
+      VALUE "ProductName",      "UxPlay"
+      VALUE "ProductVersion",   UXPLAY_VER_STRING
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
