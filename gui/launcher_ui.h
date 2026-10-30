@@ -33,6 +33,10 @@ struct Settings {
 
 // Value of UXPLAY_MDNS that uxplay.exe reads for Settings::discovery.
 const char* DiscoveryMode(const Settings& s);
+// What Start runs, as one line to paste into a Command Prompt: sets UXPLAY_MDNS
+// (Device discovery) and runs uxplay.exe by its full path (exePath; plain
+// "uxplay.exe" when empty). The password is masked.
+std::string PasteReadyCommand(const Settings& s, const std::string& exePath);
 
 static const int kMaxReceivers = 4;
 
@@ -110,6 +114,7 @@ struct UiState {
     float       scale          = 1.0f;
     std::string launcherVersion = "dev";
     std::string computerName;            // host: this PC's name (uxplay's default is "UxPlay@<name>")
+    std::string uxplayExe;               // host: full path of uxplay.exe (UTF-8), for copied commands
 };
 
 // Loads fonts at the given DPI scale. Missing files fall back to ImGui's default.

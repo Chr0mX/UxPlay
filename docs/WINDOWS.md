@@ -232,6 +232,12 @@ This produces `uxplay-windows-<version>.zip` with all required DLLs bundled.
 
 The **UxPlay** shortcut opens `uxplay-gui.exe`, which configures and runs `uxplay.exe` for you.
 
+**Copy the command line.** The command shown on the Advanced page (and in the footer) is what
+**Start** runs. **Copy** gives a ready-to-paste line for a Command Prompt, with the full path to
+`uxplay.exe` and your Device discovery choice, e.g.
+`set "UXPLAY_MDNS=builtin" && "C:\Program Files\UxPlay\uxplay.exe" -vs d3d11videosink ...`.
+A password is copied as `***`; type it in yourself.
+
 **Two programs, one app.** `uxplay-gui.exe` is the UxPlay window you open. `uxplay.exe` is the
 receiver engine (shown as *UxPlay receiver engine* in Task Manager); the window starts it in the
 background, one per phone, and stops it when you quit. They are separate so that each phone gets
