@@ -54,8 +54,8 @@ ShowInstDetails show
 UxPlay turns your PC into an AirPlay receiver. Stream your iPhone or iPad \
 screen directly to Windows — no Apple TV required.$\r$\n$\r$\n\
 All required runtimes (GStreamer, OpenSSL, libplist) are bundled. \
-Apple Bonjour is required for device discovery — if it is missing, \
-setup downloads and installs it from Apple.$\r$\n$\r$\nClick Next to continue."
+iPhone and iPad find UxPlay on their own — no Apple Bonjour or iTunes \
+needed.$\r$\n$\r$\nClick Next to continue."
 
 Var SettingsDir
 Var LogDir
@@ -143,31 +143,6 @@ Section "UxPlay (required)" SEC_MAIN
   CreateShortcut "$DESKTOP\UxPlay.lnk" \
     "$INSTDIR\uxplay-gui.exe" "" "$INSTDIR\uxplay-gui.exe" 0
 
-SectionEnd
-
-; ── Apple Bonjour ─────────────────────────────────────────────────────────────
-; Needed so iPhone/iPad can discover UxPlay. If the Bonjour service is missing,
-; uxplay-gui.exe downloads Apple's installer, checks its signature, installs
-; Bonjour silently and shows progress (with retry and manual-download links if
-; that fails). Nothing is downloaded when Bonjour is already installed.
-Section "Apple Bonjour" SEC_BONJOUR
-  SectionIn RO
-  ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Services\Bonjour Service" "ImagePath"
-  ${If} $0 != ""
-    DetailPrint "Apple Bonjour is already installed."
-    Return
-  ${EndIf}
-  DetailPrint "Apple Bonjour is not installed: downloading and installing it from Apple..."
-  ${If} ${Silent}
-    ExecWait '"$INSTDIR\uxplay-gui.exe" --install-bonjour --quiet' $1
-  ${Else}
-    ExecWait '"$INSTDIR\uxplay-gui.exe" --install-bonjour' $1
-  ${EndIf}
-  ${If} $1 == 0
-    DetailPrint "Apple Bonjour installed."
-  ${Else}
-    DetailPrint "Apple Bonjour was not installed. UxPlay can install it later (Connection page)."
-  ${EndIf}
 SectionEnd
 
 ; ── Minimum OS check ──────────────────────────────────────────────────────────

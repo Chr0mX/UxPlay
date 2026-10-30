@@ -16,9 +16,6 @@
 
 IDI_UXPLAY ICON "uxplay.ico"
 
-// Common Controls v6 for the Bonjour setup task dialog (see bonjour_win.cpp)
-2 24 "comctl6.manifest"
-
 1 VERSIONINFO
 FILEVERSION     UXPLAY_VER_MAJOR, UXPLAY_VER_MINOR, UXPLAY_VER_PATCH, 0
 PRODUCTVERSION  UXPLAY_VER_MAJOR, UXPLAY_VER_MINOR, UXPLAY_VER_PATCH, 0

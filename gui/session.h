@@ -68,6 +68,7 @@ public:
     unsigned    videoW = 0, videoH = 0;   // current stream frame size (0 = unknown)
     int         videoSizeSerial = 0;      // increments on each size report (rotation, new stream)
     std::string uxplayVersion;        // from the startup banner, if seen
+    std::string discovery;            // "builtin" (UxPlay's own mDNS) or "bonjour" (Apple), once advertised
     bool        hasError     = false;
     ErrorInfo   error;
     int         errorSerial  = 0;     // increments on each new error

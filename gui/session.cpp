@@ -72,9 +72,11 @@ ErrorInfo DescribeErrorKind(const std::string& kind) {
     e.kind = kind;
     if (kind == "bonjour") {
         e.title  = "Device discovery is unavailable";
-        e.detail = "UxPlay could not reach the Bonjour (mDNS) service, so iPhone and iPad cannot find this PC.";
-        e.hint   = "Install Apple Bonjour (use Install Bonjour below, or Apple's \"Bonjour Print Services "
-                   "for Windows\"), make sure the Bonjour Service is running, then try again.";
+        e.detail = "UxPlay could not start device discovery (mDNS on UDP port 5353), so iPhone and iPad "
+                   "cannot find this PC.";
+        e.hint   = "Check that a firewall or security tool is not blocking UxPlay, then try again. If it keeps "
+                   "failing, restart the PC, or install Apple's \"Bonjour Print Services for Windows\" and "
+                   "UxPlay will use it instead.";
     } else if (kind == "name-conflict") {
         e.title  = "Server name already in use";
         e.detail = "Another AirPlay receiver on the network is advertising the same name.";
@@ -173,6 +175,7 @@ void Session::OnLaunched(double now, unsigned newPid, const std::string& cmd) {
     streamingSince = 0.0;
     deviceName.clear(); deviceModel.clear(); deviceId.clear(); deviceAddress.clear(); streamKinds.clear();
     videoW = videoH = 0;
+    discovery.clear();
     recentProblems_.clear();
     pendingKind_.clear();
     stopRequested_ = false;
@@ -229,6 +232,8 @@ void Session::HandleStatus(double now, const std::string& body) {
         streamingSince = 0.0;
         hasError = false;
         SetPhase(Phase::Connecting, now);
+    } else if (ev == "discovery") {
+        discovery = Field(body, "backend");
     } else if (ev == "video-size") {
         unsigned w = (unsigned) std::strtoul(Field(body, "w").c_str(), nullptr, 10);
         unsigned h = (unsigned) std::strtoul(Field(body, "h").c_str(), nullptr, 10);

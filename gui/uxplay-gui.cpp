@@ -52,7 +52,6 @@
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
 #include "launcher_ui.h"
-#include "bonjour_win.h"
 #include "resource.h"
 
 #ifndef UXPLAY_LAUNCHER_VERSION
@@ -1138,76 +1137,6 @@ static void OpenPath(const std::wstring& p)
     if ((INT_PTR)r <= 32) g_log.Write("WARN", "app", "Could not open " + Utf8(p));
 }
 
-// ── Bonjour ───────────────────────────────────────────────────────────────────
-// Detection on startup; if missing, the automatic install starts by itself (it
-// downloads only when Bonjour is not installed). The UI card shows progress,
-// failures with retry / manual links, and a confirmation once it is installed.
-
-static bool g_bonjourWasBusy = false;
-static bool g_bonjourJustInstalled = false;
-
-static void HostBonjourStatus(BonjourView* out)
-{
-    bonjour::Status st = bonjour::Snapshot();
-    out->percent = st.percent;
-    out->message = st.message;
-    out->error = st.error;
-    out->canRunInteractive = st.canRunInteractive;
-    out->installerUrl = bonjour::kInstallerUrl;
-    out->supportUrl = bonjour::kSupportUrl;
-    switch (st.state) {
-    case bonjour::State::Missing:     out->state = BonjourView::Missing; break;
-    case bonjour::State::Downloading:
-    case bonjour::State::Installing:  out->state = BonjourView::Working; break;
-    case bonjour::State::Failed:      out->state = BonjourView::Failed;  break;
-    case bonjour::State::Installed:   out->state = g_bonjourJustInstalled ? BonjourView::JustInstalled : BonjourView::Hidden; break;
-    default:                          out->state = BonjourView::Hidden;  break;
-    }
-}
-
-static void HostBonjourInstall(bool interactive)
-{
-    g_log.Write("INFO", "bonjour", interactive ? "Opening Apple's Bonjour installer" : "Installing Bonjour automatically");
-    bonjour::StartInstall(interactive);
-    g_bonjourWasBusy = true;
-}
-
-static bool HostBonjourRecheck()
-{
-    bool was = bonjour::Snapshot().state == bonjour::State::Installed;
-    bonjour::Refresh();
-    bool ok = bonjour::Snapshot().state == bonjour::State::Installed;
-    if (ok && !was) { g_bonjourJustInstalled = true; g_log.Write("INFO", "bonjour", "Bonjour detected"); }
-    return ok;
-}
-
-static void HostBonjourDismiss() { g_bonjourJustInstalled = false; }
-
-static void HostOpenUrl(const char* url)
-{
-    ShellExecuteW(NULL, L"open", Wide(url).c_str(), NULL, NULL, SW_SHOWNORMAL);
-}
-
-// Called every loop iteration: logs the outcome of an install and restarts
-// running receivers so they register with the freshly installed service.
-static void PollBonjour()
-{
-    if (!g_bonjourWasBusy || bonjour::Busy()) return;
-    g_bonjourWasBusy = false;
-    bonjour::Status st = bonjour::Snapshot();
-    if (st.state == bonjour::State::Installed) {
-        g_bonjourJustInstalled = true;
-        g_log.Write("INFO", "bonjour", st.message.empty() ? "Bonjour installed" : st.message);
-        if (IsUxPlayRunning()) {
-            g_log.Write("INFO", "bonjour", "Restarting the receiver so it is discoverable");
-            StopUxPlay();
-            LaunchUxPlay(g_settings);
-        }
-    } else if (st.state == bonjour::State::Failed) {
-        g_log.Write("WARN", "bonjour", "Bonjour installation failed: " + st.error);
-    }
-}
-
 static void HostStart(const Settings& s)      { LaunchUxPlay(s); }
 static void HostStop()                        { StopUxPlay(); }
 static int  HostGetRotation()                 { return g_overlayRot; }
@@ -1404,23 +1333,6 @@ static UiFonts BuildFonts(float scale)
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
 {
-    // Setup helper: "uxplay-gui.exe --install-bonjour [--quiet]" (run by the
-    // installer) installs Apple Bonjour with a progress dialog and exits.
-    {
-        int argc = 0;
-        LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-        bool setup = false, quiet = false;
-        for (int i = 1; argv && i < argc; ++i) {
-            if (!lstrcmpiW(argv[i], L"--install-bonjour")) setup = true;
-            if (!lstrcmpiW(argv[i], L"--quiet")) quiet = true;
-        }
-        if (argv) LocalFree(argv);
-        if (setup) {
-            ImGui_ImplWin32_EnableDpiAwareness();   // crisp dialog on high-DPI displays
-            return bonjour::RunSetupDialog(quiet);
-        }
-    }
-
     // One launcher at a time: a second start brings the first one forward
     // instead of starting a second receiver.
     HANDLE single = CreateMutexW(NULL, TRUE, L"Local\\UxPlayLauncher.SingleInstance");
@@ -1546,18 +1458,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         HostOpenLogFile, HostOpenLogFolder, HostOpenSettingsFolder, HostOpenDocs, HostExit,
         HostThemeApplied, HostLogStatus,
         HostFolderPath, HostFolderIsDefault, HostChooseFolder, HostResetFolder,
-        HostBonjourStatus, HostBonjourInstall, HostBonjourRecheck, HostBonjourDismiss, HostOpenUrl,
     };
-
-    // Bonjour: detect once; install automatically when it is missing.
-    bonjour::SetOwnerWindow(hwnd);
-    bonjour::Refresh();
-    if (bonjour::Snapshot().state == bonjour::State::Missing) {
-        g_log.Write("WARN", "bonjour", "Bonjour is not installed; installing it automatically");
-        HostBonjourInstall(false);
-    } else {
-        g_log.Write("INFO", "bonjour", "Bonjour is installed");
-    }
 
     ShowWindow(hwnd, g_prefs.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL);
     UpdateWindow(hwnd);
@@ -1590,8 +1491,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             PollProcess();
             UpdateReceiverPool(g_settings);
             UpdateMouseHook();
-            PollBonjour();
-            ManagePlayerWindows();
+                ManagePlayerWindows();
             if (g_inTray) {
                 std::wstring tip = IsUxPlayRunning() ? L"UxPlay \x2014 " + Wide(PhaseLabel(g_sessions[0].phase)) : L"UxPlay";
                 if (tip != g_nid.szTip) {
@@ -1630,7 +1530,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         }
         UpdateReceiverPool(g_settings);
         UpdateMouseHook();
-        PollBonjour();
         if (g_now - lastBrand > 0.1) { lastBrand = g_now; ManagePlayerWindows(); }
 
         DrawLauncherUI(g_settings, g_ui, g_sessions, g_rxCount, g_prefs, host, fonts);   // sessions of the current/last run
@@ -1651,7 +1550,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         uint64_t lines = 0;
         for (int i = 0; i < kMaxReceivers; ++i) lines += g_sessions[i].linesAdded;
         if (lines != lastLines) { lastLines = lines; lastActivity = g_now; }
-        bool busy = g_ui.animating || bonjour::Busy() || g_dpiChanged || ImGui::IsAnyItemActive() ||
+        bool busy = g_ui.animating || g_dpiChanged || ImGui::IsAnyItemActive() ||
                     ImGui::IsMouseDown(ImGuiMouseButton_Left) || g_now - lastActivity < 0.5;
         if (pr == DXGI_STATUS_OCCLUDED)
             MsgWaitForMultipleObjects(0, NULL, FALSE, 250, QS_ALLINPUT);   // window covered: nothing visible

@@ -778,6 +778,17 @@ static void PageConnection(Settings& s, const UiState& ui, Session* sessions, in
     if (s.port < 1) s.port = 1;
     if (s.port > 65535) s.port = 65535;
     EndRow();
+    {
+        // Read-only: how phones find this PC (reported by uxplay.exe once it advertises).
+        const std::string& d = sessions[0].discovery;
+        const char* value = d == "builtin" ? "Built-in" : d == "bonjour" ? "Apple Bonjour" : running ? "Starting\xe2\x80\xa6" : "Built-in";
+        BeginRow("Device discovery",
+                 "How iPhone and iPad find this PC. UxPlay has its own discovery, so Apple Bonjour is not needed; "
+                 "if Bonjour is installed, UxPlay uses it instead.", nullptr, 160);
+        ImGui::AlignTextToFramePadding();
+        TextColored(g_fonts.strong, d.empty() && running ? P->TextMuted : P->Text, value);
+        EndRow();
+    }
     EndCard();
 
     SectionHeader("Multiple phones", "When a phone is already mirroring, another receiver opens for the next one.");
@@ -1264,141 +1275,6 @@ static void ErrorCard(UiState& ui, Session& ses, const Settings& s, const UiHost
     if (dismiss) ses.DismissError();
 }
 
-// ── Bonjour card ──────────────────────────────────────────────────────────────
-// Shown above every page while Apple Bonjour is missing, being installed, failed
-// to install, or was just installed. Without Bonjour, phones cannot see this PC.
-
-static bool Link(const char* label, const char* url, const UiHost& host)
-{
-    ImGui::PushFont(g_fonts.body);
-    ImVec2 p = ImGui::GetCursorScreenPos();
-    ImVec2 ts = ImGui::CalcTextSize(label);
-    bool pressed = ImGui::InvisibleButton(label, ts);
-    bool hov = ImGui::IsItemHovered();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImU32 c = Col(hov ? P->AccentHover : P->AccentGlyph);
-    dl->AddText(p, c, label);
-    if (hov) {
-        dl->AddLine(ImVec2(p.x, p.y + ts.y), ImVec2(p.x + ts.x, p.y + ts.y), c, Px(1));
-        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        ImGui::SetTooltip("%s", url);
-    }
-    FocusRing(p, ImVec2(p.x + ts.x, p.y + ts.y), Px(2));
-    ImGui::PopFont();
-    if (pressed && host.openUrl) host.openUrl(url);
-    return pressed;
-}
-
-static void BonjourCard(UiState& ui, const UiHost& host, float w)
-{
-    if (!host.bonjourStatus) return;
-    BonjourView b;
-    host.bonjourStatus(&b);
-    if (b.state == BonjourView::Hidden) return;
-
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    float pad = Px(tok::S4);
-    float textX = pad + Px(30);
-    float textW = w - textX - pad;
-    ImVec2 a = ImGui::GetCursorScreenPos();
-    bool done = b.state == BonjourView::JustInstalled;
-    bool working = b.state == BonjourView::Working;
-    ImVec4 tint = done ? P->Success : (b.state == BonjourView::Failed ? P->Danger : P->Warning);
-    if (working) tint = P->Accent;
-
-    dl->ChannelsSplit(2);
-    dl->ChannelsSetCurrent(1);
-    ImGui::SetCursorScreenPos(ImVec2(a.x + textX, a.y + pad));
-    ImGui::BeginGroup();
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + textW - (done ? Px(28) : 0.0f));
-    float bh = Px(30);
-    switch (b.state) {
-    case BonjourView::Missing:
-        TextColored(g_fonts.strong, P->Text, "Bonjour is not installed");
-        TextColored(g_fonts.body, P->TextMuted,
-                    "iPhone and iPad use Apple Bonjour to find this PC. Without it, UxPlay does not appear "
-                    "in the AirPlay list. UxPlay can download it from Apple and install it for you.");
-        ImGui::Dummy(ImVec2(0, Px(2)));
-        if (ActionButton("Install Bonjour", Icon::Check, true, ImVec2(Px(150), bh), BtnKind::Primary,
-                         "Download Apple's installer, verify it and install Bonjour (needs administrator permission)"))
-            host.bonjourInstall(false);
-        ImGui::SameLine(0, Px(tok::S2));
-        if (ActionButton("Check again", Icon::Restart, true, ImVec2(Px(124), bh), BtnKind::Secondary,
-                         "Detect Bonjour again, e.g. after installing it yourself"))
-            if (!host.bonjourRecheck()) ShowToast(ui, "Bonjour is still not installed on this PC.", true);
-        break;
-    case BonjourView::Working: {
-        TextColored(g_fonts.strong, P->Text, "Installing Bonjour");
-        TextColored(g_fonts.body, P->TextMuted, b.message.c_str());
-        ImGui::Dummy(ImVec2(0, Px(4)));
-        ImVec2 q = ImGui::GetCursorScreenPos();
-        float bw = ImMin(textW, Px(360)), th = Px(6);
-        dl->AddRectFilled(q, ImVec2(q.x + bw, q.y + th), Col(P->TrackOff), th * 0.5f);
-        if (b.percent >= 0) {
-            float f = ImClamp(b.percent / 100.0f, 0.0f, 1.0f);
-            if (f > 0) dl->AddRectFilled(q, ImVec2(q.x + bw * f, q.y + th), Col(P->Accent), th * 0.5f);
-        } else {   // indeterminate: a sliding segment
-            float t = g_reduceMotion ? 0.3f : (float)fmod(ImGui::GetTime() * 0.8, 1.0);
-            if (!g_reduceMotion) g_animating = true;
-            float x0 = q.x + (bw * 1.3f) * t - bw * 0.3f, x1 = x0 + bw * 0.3f;
-            dl->AddRectFilled(ImVec2(ImMax(q.x, x0), q.y), ImVec2(ImMin(q.x + bw, x1), q.y + th), Col(P->Accent), th * 0.5f);
-        }
-        ImGui::Dummy(ImVec2(bw, th + Px(2)));
-        break;
-    }
-    case BonjourView::Failed:
-        TextColored(g_fonts.strong, P->Text, "Bonjour could not be installed automatically");
-        TextColored(g_fonts.body, P->TextMuted, b.error.c_str());
-        TextColored(g_fonts.body, P->Text, "You can try again, or install Bonjour yourself and then choose Check again:");
-        ImGui::Dummy(ImVec2(0, Px(1)));
-        Link("Download Bonjour Installer", b.installerUrl, host);
-        ImGui::SameLine(0, Px(tok::S4));
-        Link("Apple Support \xe2\x80\x94 Bonjour", b.supportUrl, host);
-        ImGui::Dummy(ImVec2(0, Px(4)));
-        if (ActionButton("Try again", Icon::Restart, true, ImVec2(Px(112), bh), BtnKind::Primary,
-                         "Try the automatic installation again"))
-            host.bonjourInstall(false);
-        ImGui::SameLine(0, Px(tok::S2));
-        if (b.canRunInteractive) {
-            if (ActionButton("Open Apple's installer", Icon::File, true, ImVec2(Px(212), bh), BtnKind::Secondary,
-                             "Run Apple's Bonjour setup with its own windows"))
-                host.bonjourInstall(true);
-            ImGui::SameLine(0, Px(tok::S2));
-        }
-        if (ActionButton("Check again", Icon::Check, true, ImVec2(Px(124), bh), BtnKind::Secondary,
-                         "I installed Bonjour: detect it again"))
-            if (!host.bonjourRecheck()) ShowToast(ui, "Bonjour is still not installed on this PC.", true);
-        break;
-    default:   // JustInstalled
-        TextColored(g_fonts.strong, P->Text, "Bonjour is installed");
-        TextColored(g_fonts.body, P->TextMuted, b.message.empty() ? "iPhone and iPad can now find this PC." : b.message.c_str());
-        break;
-    }
-    ImGui::PopTextWrapPos();
-    ImGui::EndGroup();
-    ImVec2 e(a.x + w, ImGui::GetItemRectMax().y + pad);
-
-    bool dismiss = false;
-    if (done) {
-        ImGui::SetCursorScreenPos(ImVec2(e.x - pad - Px(24) + Px(6), a.y + pad - Px(4)));
-        dismiss = IconButton("##bjdismiss", Icon::Close, "Dismiss", 24.0f);
-    }
-
-    dl->ChannelsSetCurrent(0);
-    dl->AddRectFilled(a, e, Col(P->Surface), Px(tok::RLarge));
-    dl->AddRectFilled(a, e, Col(WithAlpha(tint, P->dark ? 0.08f : 0.06f)), Px(tok::RLarge));
-    dl->AddRect(a, e, Col(WithAlpha(tint, 0.40f)), Px(tok::RLarge));
-    dl->AddRectFilled(a, ImVec2(a.x + Px(3), e.y), Col(tint), Px(tok::RLarge), ImDrawFlags_RoundCornersLeft);
-    ImVec2 ic(a.x + pad + Px(9), a.y + pad + Px(9));
-    if (working) DrawSpinner(dl, ic, Px(7), Col(P->Border), Col(tint));
-    else DrawIcon(dl, done ? Icon::Check : Icon::Alert, ic, Px(17), Col(tint));
-    dl->ChannelsMerge();
-
-    ImGui::SetCursorScreenPos(ImVec2(a.x, e.y));
-    ImGui::Dummy(ImVec2(w, Px(tok::S3)));
-    if (dismiss && host.bonjourDismiss) host.bonjourDismiss();
-}
-
 // ── Console drawer ────────────────────────────────────────────────────────────
 
 static bool ContainsNoCase(const std::string& hay, const char* needle)
@@ -1833,7 +1709,6 @@ void DrawLauncherUI(Settings& s, UiState& ui, Session* sessions, int count, UiPr
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y);
 
         if (ses.hasError) ErrorCard(ui, ses, s, host, colW);
-        BonjourCard(ui, host, colW);
 
         // Page title with a short fade/slide on change
         ImGuiID pageAnimId = ImGui::GetID("##pageanim");
