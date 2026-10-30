@@ -601,6 +601,45 @@ static gboolean x11_window_callback(gpointer loop) {
 static void cleanup();
 
 #ifdef _WIN32
+/* Windows package (portable ZIP / installer): GStreamer is bundled next to
+ * uxplay.exe (gst-plugins\, gst-plugin-scanner.exe). Point GStreamer at it so
+ * uxplay.exe works when started directly from a Command Prompt, with no batch
+ * file. Variables that are already set (by the UxPlay window or the user) are
+ * left alone, and a build without a gst-plugins folder next to the exe (e.g. an
+ * MSYS2 development build) is not affected. Must run before gst_init(). */
+static void use_bundled_gstreamer() {
+    wchar_t exe[MAX_PATH];
+    DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return;
+    std::wstring dir(exe, n);
+    size_t slash = dir.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return;
+    dir.resize(slash + 1);
+    std::wstring plugins = dir + L"gst-plugins";
+    DWORD attr = GetFileAttributesW(plugins.c_str());
+    if (attr == INVALID_FILE_ATTRIBUTES || !(attr & FILE_ATTRIBUTE_DIRECTORY)) return;
+
+    auto set_if_unset = [](const wchar_t *name, const std::wstring &value) {
+        SetLastError(0);
+        if (GetEnvironmentVariableW(name, NULL, 0) == 0 && GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
+            SetEnvironmentVariableW(name, value.c_str());
+        }
+    };
+    set_if_unset(L"GST_PLUGIN_PATH", plugins);
+    set_if_unset(L"GST_PLUGIN_SCANNER", dir + L"gst-plugin-scanner.exe");
+    set_if_unset(L"GST_REGISTRY", dir + L"gstreamer-registry.bin");
+    set_if_unset(L"GST_PLUGIN_SYSTEM_PATH", L"");   /* no separate system-wide GStreamer */
+
+    /* bundled DLLs first on PATH (for the plugin scanner and plugin dependencies) */
+    std::vector<wchar_t> path(32768);
+    DWORD len = GetEnvironmentVariableW(L"PATH", path.data(), (DWORD) path.size());
+    std::wstring current(path.data(), len < path.size() ? len : 0);
+    std::wstring first = dir.substr(0, dir.size() - 1);   /* without the trailing separator */
+    if (current.compare(0, dir.size(), dir) != 0 && current.compare(0, first.size() + 1, first + L";") != 0) {
+        SetEnvironmentVariableW(L"PATH", (first + L";" + current).c_str());
+    }
+}
+
 static gboolean handle_signal(gpointer data) {
     relaunch_video = false;
     g_main_loop_quit(gmainloop);
@@ -2942,6 +2981,7 @@ int main (int argc, char *argv[]) {
         setvbuf(stdout, NULL, _IONBF, 0);
     }
 #ifdef _WIN32
+    use_bundled_gstreamer();   /* replaces uxplay.bat */
     if (!SetConsoleCtrlHandler(CtrlHandler, TRUE)) {
         LOGE("Could not set control handler");
         exit(1);

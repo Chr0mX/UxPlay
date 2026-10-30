@@ -22,12 +22,13 @@ UxPlay runs natively on Windows 10 and 11 (64-bit) using GStreamer for audio/vid
 
 1. Download the latest `uxplay-windows-<version>.zip` from the [Releases](../../../releases) page.
 2. Extract to any folder (e.g. `C:\UxPlay`).
-4. Double-click **`uxplay.bat`** or open a Command Prompt in the folder and run:
+3. Double-click **`uxplay-gui.exe`** (the UxPlay window) and press **Start**. To use the command line
+   instead, open a Command Prompt in the folder and run:
    ```
-   uxplay.bat
+   uxplay.exe
    ```
-5. When Windows Firewall prompts, click **Allow access** on both private and public networks.
-6. On your iPhone/iPad: open **Control Center → Screen Mirroring** and tap the device name shown in UxPlay's title bar.
+4. When Windows Firewall prompts, click **Allow access** on both private and public networks.
+5. On your iPhone/iPad: open **Control Center → Screen Mirroring** and tap the device name shown in UxPlay's title bar.
 
 ---
 
@@ -70,7 +71,7 @@ Hardware decoding dramatically reduces CPU usage and improves latency. Pass `-vd
 Works on virtually all modern Intel and AMD integrated/discrete GPUs:
 
 ```bat
-uxplay.bat -vd d3d11videodec -vs d3d11videosink
+uxplay.exe -vd d3d11videodec -vs d3d11videosink
 ```
 
 ### NVIDIA — NVDEC
@@ -78,12 +79,12 @@ uxplay.bat -vd d3d11videodec -vs d3d11videosink
 Requires an NVIDIA GPU with NVDEC support (GTX 600+ for H.264, GTX 900+ for H.265):
 
 ```bat
-uxplay.bat -vd nvh264dec -vs d3d11videosink
+uxplay.exe -vd nvh264dec -vs d3d11videosink
 ```
 
 For H.265/HEVC content:
 ```bat
-uxplay.bat -vd nvh265dec -vs d3d11videosink
+uxplay.exe -vd nvh265dec -vs d3d11videosink
 ```
 
 ### Software Decoding (fallback)
@@ -91,7 +92,7 @@ uxplay.bat -vd nvh265dec -vs d3d11videosink
 If hardware decoding causes issues, fall back to FFmpeg software decode:
 
 ```bat
-uxplay.bat -vd avdec_h264 -vs d3d11videosink
+uxplay.exe -vd avdec_h264 -vs d3d11videosink
 ```
 
 ---
@@ -125,7 +126,7 @@ uxplay.bat -vd avdec_h264 -vs d3d11videosink
 ### Fullscreen at startup
 
 ```bat
-uxplay.bat -fs
+uxplay.exe -fs
 ```
 
 ### Fullscreen toggle at runtime
@@ -136,7 +137,7 @@ uxplay.bat -fs
 ### Specific resolution / window size
 
 ```bat
-uxplay.bat -s 1920x1080
+uxplay.exe -s 1920x1080
 ```
 
 ### Target a secondary monitor
@@ -144,7 +145,7 @@ uxplay.bat -s 1920x1080
 Use the `-o` flag to select a display index (0 = primary):
 
 ```bat
-uxplay.bat -vs "d3d11videosink display-index=1" -fs
+uxplay.exe -vs "d3d11videosink display-index=1" -fs
 ```
 
 Or set a custom GStreamer pipeline element property via `-vp`/`-vs` with quoted options.
@@ -154,7 +155,7 @@ Or set a custom GStreamer pipeline element property via `-vp`/`-vs` with quoted 
 ## Common Options
 
 ```
-uxplay.bat [options]
+uxplay.exe [options]
 
   -n <name>       AirPlay receiver name shown on iOS (default: hostname)
   -nh             Do not use mDNS hostname; use -n name instead
@@ -235,8 +236,8 @@ The **UxPlay** shortcut opens `uxplay-gui.exe`, which configures and runs `uxpla
 receiver engine (shown as *UxPlay receiver engine* in Task Manager); the window starts it in the
 background, one per phone, and stops it when you quit. They are separate so that each phone gets
 its own engine (several phones at once), a crash in one stream cannot close the window, engine
-updates from upstream UxPlay stay easy to merge, and `uxplay.exe`/`uxplay.bat` can still be used
-from the command line.
+updates from upstream UxPlay stay easy to merge, and `uxplay.exe` can still be used from the
+command line. It finds the bundled GStreamer (the `gst-plugins` folder next to it) by itself.
 
 - **No console window.** The receiver runs without a console. Its output goes to the in-app
   console (**View → Show Console**, `Ctrl+``) and to a log file. Hiding the console never stops the receiver.
@@ -276,8 +277,8 @@ from the command line.
 
 ### Black screen / no video
 
-- Try software decode: `uxplay.bat -vd avdec_h264`
-- Try a different video sink: `uxplay.bat -vs autovideosink`
+- Try software decode: `uxplay.exe -vd avdec_h264`
+- Try a different video sink: `uxplay.exe -vs autovideosink`
 - Check for GStreamer errors in the console output (run `uxplay.exe` directly from Command Prompt).
 
 ### Audio but no video (or vice versa)
@@ -288,13 +289,13 @@ from the command line.
 ### App crashes on startup
 
 - Run `uxplay.exe` from a Command Prompt to see the error message.
-- Missing DLLs: ensure you're using `uxplay.bat` which sets `GST_PLUGIN_PATH`.
+- Missing plugins or DLLs: keep `uxplay.exe` together with its `gst-plugins` folder and DLLs (it sets `GST_PLUGIN_PATH` to that folder itself).
 
 ### NVIDIA d3d12videosink crash
 
 Known issue with some NVIDIA driver versions. Use `d3d11videosink` instead:
 ```bat
-uxplay.bat -vs d3d11videosink
+uxplay.exe -vs d3d11videosink
 ```
 
 ### Server name with non-ASCII characters

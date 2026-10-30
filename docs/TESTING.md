@@ -17,7 +17,7 @@ Use this checklist to validate a portable Windows release on a clean system.
 - [ ] Extract with Windows built-in extractor (right-click → Extract All)
 - [ ] Verify the following files are present in the extracted folder:
   - [ ] `uxplay.exe`
-  - [ ] `uxplay.bat`
+  - [ ] `uxplay-gui.exe`
   - [ ] `README.md`
   - [ ] `dnssd.dll` (or note that Bonjour must be installed separately)
   - [ ] `gst-plugins/` directory with at least 10 `.dll` files
@@ -36,7 +36,7 @@ Use this checklist to validate a portable Windows release on a clean system.
 
 ## 3. First Launch
 
-- [ ] Double-click `uxplay.bat` — terminal window opens with UxPlay startup log
+- [ ] Run `uxplay.exe` from a Command Prompt in the folder — UxPlay startup log appears (no batch file needed: it finds the bundled GStreamer itself)
 - [ ] **Windows Defender Firewall prompt appears** — click "Allow access"
 - [ ] UxPlay prints the server name and listening port (e.g. `Listening on port 7100`)
 - [ ] No crash, no immediate exit
@@ -64,9 +64,9 @@ Use this checklist to validate a portable Windows release on a clean system.
 
 ## 6. Video Quality & Fullscreen
 
-- [ ] `-fs` flag: `uxplay.bat -fs` — starts in fullscreen
+- [ ] `-fs` flag: `uxplay.exe -fs` — starts in fullscreen
 - [ ] Rotate iOS device — mirrored display rotates accordingly
-- [ ] `-s 1920x1080`: `uxplay.bat -s 1920x1080` — window/output is correct size
+- [ ] `-s 1920x1080`: `uxplay.exe -s 1920x1080` — window/output is correct size
 - [ ] Window close button exits UxPlay cleanly (no crash, no hanging process)
 
 ---
@@ -75,11 +75,11 @@ Use this checklist to validate a portable Windows release on a clean system.
 
 *Requires Intel HD/Iris/Arc or AMD Radeon GPU.*
 
-- [ ] `uxplay.bat -vd d3d11videodec -vs d3d11videosink`
+- [ ] `uxplay.exe -vd d3d11videodec -vs d3d11videosink`
   - [ ] Video renders correctly
   - [ ] CPU usage is lower than software decode
   - [ ] No crash / green frames / corruption
-- [ ] H.265/HEVC (if supported by device): `uxplay.bat -vd d3d11videodec`
+- [ ] H.265/HEVC (if supported by device): `uxplay.exe -vd d3d11videodec`
   - [ ] Streams from iOS without error
 
 ---
@@ -88,17 +88,17 @@ Use this checklist to validate a portable Windows release on a clean system.
 
 *Requires NVIDIA GPU with NVDEC (GTX 600+ for H.264, GTX 900+ for H.265).*
 
-- [ ] `uxplay.bat -vd nvh264dec -vs d3d11videosink`
+- [ ] `uxplay.exe -vd nvh264dec -vs d3d11videosink`
   - [ ] Video renders correctly
   - [ ] `libgstnvcodec.dll` is present in `gst-plugins/`
   - [ ] No segfault or DLL error
-- [ ] H.265: `uxplay.bat -vd nvh265dec -vs d3d11videosink`
+- [ ] H.265: `uxplay.exe -vd nvh265dec -vs d3d11videosink`
 
 ---
 
 ## 9. D3D12 Video Sink
 
-- [ ] `uxplay.bat -vs d3d12videosink`
+- [ ] `uxplay.exe -vs d3d12videosink`
   - [ ] Video renders
   - [ ] **Alt+Enter** toggles fullscreen (note: requires DirectX 12 capable GPU)
   - [ ] On older NVIDIA: verify no crash; if crash occurs, document and recommend `d3d11videosink`
@@ -107,7 +107,7 @@ Use this checklist to validate a portable Windows release on a clean system.
 
 ## 10. Software Decoding (Fallback)
 
-- [ ] `uxplay.bat -vd avdec_h264 -vs d3d11videosink`
+- [ ] `uxplay.exe -vd avdec_h264 -vs d3d11videosink`
   - [ ] Video renders (higher CPU, no GPU required)
   - [ ] Useful as regression check if hardware decode fails
 
@@ -118,22 +118,22 @@ Use this checklist to validate a portable Windows release on a clean system.
 - [ ] On iOS: play music and use AirPlay to send **audio only** (not screen mirroring)
 - [ ] Audio plays on PC
 - [ ] No video window opens (expected behavior)
-- [ ] `uxplay.bat -as wasapisink` — audio works with WASAPI sink
+- [ ] `uxplay.exe -as wasapisink` — audio works with WASAPI sink
 
 ---
 
 ## 12. Multi-Monitor
 
 - [ ] Connect a second display
-- [ ] `uxplay.bat -vs "d3d11videosink display-index=1"` — video appears on second monitor
-- [ ] `uxplay.bat -fs -vs "d3d11videosink display-index=1"` — fullscreen on second monitor
+- [ ] `uxplay.exe -vs "d3d11videosink display-index=1"` — video appears on second monitor
+- [ ] `uxplay.exe -fs -vs "d3d11videosink display-index=1"` — fullscreen on second monitor
 
 ---
 
 ## 13. Authentication Options
 
-- [ ] `uxplay.bat -pin` — iOS prompts for PIN; enter it; connection succeeds
-- [ ] `uxplay.bat -pw testpass` — iOS prompts for password; connection succeeds
+- [ ] `uxplay.exe -pin` — iOS prompts for PIN; enter it; connection succeeds
+- [ ] `uxplay.exe -pw testpass` — iOS prompts for password; connection succeeds
 - [ ] Wrong password: connection is rejected cleanly
 
 ---
