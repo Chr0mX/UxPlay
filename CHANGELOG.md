@@ -4,6 +4,24 @@ Changes to the Windows app of this fork (UxPlay for Windows). The receiver engin
 is [UxPlay](https://github.com/FDH2/UxPlay) by its upstream authors; its own changes
 are listed in the upstream README.
 
+## [Unreleased]
+
+### Improvements
+- **Much smaller download.** The installer is about 12 MB instead of 49 MB, the
+  portable ZIP about 16 MB instead of 69 MB (39 MB instead of 181 MB unpacked;
+  measured in CI). The bundled FFmpeg now contains only the decoders UxPlay uses
+  (H.264, H.265, AAC including AAC-ELD, ALAC, and common audio formats for HLS
+  video) instead of MSYS2's full build, which pulled in 91 libraries UxPlay
+  never used (video encoders, subtitle rendering, speech recognition, Blu-ray,
+  SSH and others).
+
+### Changes
+- FFmpeg is built from the same version as MSYS2's (currently 9.0.2), without
+  external libraries. Hardware video decoding (D3D11, NVIDIA, AMD) does not use
+  FFmpeg and is unchanged. Each build checks that every GStreamer plugin still
+  loads and that the H.264, H.265, AAC and ALAC decoders are present, and keeps
+  the full FFmpeg otherwise.
+
 ## [1.73.6] - 2026-10-30
 
 First full release since **dev build 50** (2026-07-26, commit `bbb772e`). Compared
