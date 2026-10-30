@@ -86,6 +86,11 @@ std::string BuildArgs(const Settings& s, bool redact, int index, const std::stri
     return args;
 }
 
+const char* DiscoveryMode(const Settings& s)
+{
+    return s.discovery == 1 ? "builtin" : s.discovery == 2 ? "bonjour" : "auto";
+}
+
 std::string SerializeSettings(const Settings& s)
 {
     std::ostringstream f;
@@ -105,6 +110,7 @@ std::string SerializeSettings(const Settings& s)
     f << "debug="           << (s.debug ? 1 : 0) << "\n";
     f << "extraArgs="       << s.extraArgs     << "\n";
     f << "receivers="       << s.receivers     << "\n";
+    f << "discovery="       << s.discovery     << "\n";
     return f.str();
 }
 
@@ -140,6 +146,7 @@ void ParseSettings(Settings& s, const std::string& text)
         else if (key == "debug")           s.debug = (val == "1");
         else if (key == "extraArgs")       copy(s.extraArgs, sizeof(s.extraArgs), val);
         else if (key == "receivers")       s.receivers = toInt(val, s.receivers);
+        else if (key == "discovery")       s.discovery = toInt(val, s.discovery);
     }
     auto clamp = [](int& v, int lo, int hi) { if (v < lo) v = lo; if (v > hi) v = hi; };
     clamp(s.videoSinkIdx,    0, kVideoSinkCount    - 1);
@@ -147,6 +154,7 @@ void ParseSettings(Settings& s, const std::string& text)
     clamp(s.audioSinkIdx,    0, kAudioSinkCount    - 1);
     clamp(s.port,            1, 65535);
     clamp(s.receivers,       1, kMaxReceivers);
+    clamp(s.discovery,       0, 2);
     if (!(s.volume >= 0.0f)) s.volume = 0.0f;   // also catches NaN
     if (s.volume > 1.0f) s.volume = 1.0f;
     if (s.fps < 0 || s.fps > 256) s.fps = 0;
@@ -779,14 +787,29 @@ static void PageConnection(Settings& s, const UiState& ui, Session* sessions, in
     if (s.port > 65535) s.port = 65535;
     EndRow();
     {
-        // Read-only: how phones find this PC (reported by uxplay.exe once it advertises).
-        const std::string& d = sessions[0].discovery;
-        const char* value = d == "builtin" ? "Built-in" : d == "bonjour" ? "Apple Bonjour" : running ? "Starting\xe2\x80\xa6" : "Built-in";
-        BeginRow("Device discovery",
-                 "How iPhone and iPad find this PC. UxPlay has its own discovery, so Apple Bonjour is not needed; "
-                 "if Bonjour is installed, UxPlay uses it instead.", nullptr, 160);
-        ImGui::AlignTextToFramePadding();
-        TextColored(g_fonts.strong, d.empty() && running ? P->TextMuted : P->Text, value);
+        // Which mDNS/DNS-SD service advertises the receiver (UXPLAY_MDNS for uxplay.exe).
+        static const Option kModes[] = {
+            { "Automatic",          "" },
+            { "UxPlay (built-in)",  "" },
+            { "Apple Bonjour",      "" },
+        };
+        static const char* kModeDesc[] = {
+            "How iPhone and iPad find this PC. Automatic uses Apple Bonjour if it is running, "
+            "otherwise UxPlay's own discovery.",
+            "How iPhone and iPad find this PC. UxPlay's own discovery: lightweight, runs only while "
+            "receiving, nothing to install.",
+            "How iPhone and iPad find this PC. Apple Bonjour only: requires Apple's Bonjour Service "
+            "(Bonjour Print Services, iTunes or iCloud).",
+        };
+        const std::string& inUse = sessions[0].discovery;   // reported by uxplay.exe once it advertises
+        std::string desc = kModeDesc[s.discovery];
+        if (running && !inUse.empty())
+            desc += inUse == "builtin" ? " In use: UxPlay (built-in)." : " In use: Apple Bonjour.";
+        if (running) desc += " Stop the receiver to change this.";
+        BeginRow("Device discovery", desc.c_str(), nullptr, 200);
+        ImGui::BeginDisabled(running);
+        ComboOptions("##v", &s.discovery, kModes, 3);
+        ImGui::EndDisabled();
         EndRow();
     }
     EndCard();
@@ -1207,7 +1230,13 @@ static void StatusStrip(const Settings& s, UiState& ui, Session& ses, Session* s
 static void ErrorCard(UiState& ui, Session& ses, const Settings& s, const UiHost& host, float w)
 {
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ErrorInfo e = ses.error;   // copy: buttons below may change the session
+    ErrorInfo e = ses.error;   // copy: buttons below may change the session
+    if (e.kind == "bonjour" && s.discovery == 2) {   // the user chose Apple Bonjour only
+        e.detail = "Device discovery is set to Apple Bonjour, but Apple's Bonjour Service is not installed or not "
+                   "running, so iPhone and iPad cannot find this PC.";
+        e.hint   = "Install Apple's \"Bonjour Print Services for Windows\", or set Device discovery on the "
+                   "Connection page to Automatic or UxPlay (built-in), then try again.";
+    }
     float pad = Px(tok::S4);
     float textX = pad + Px(30);
     float textW = w - textX - pad - Px(28);

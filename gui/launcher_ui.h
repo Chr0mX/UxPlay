@@ -28,7 +28,11 @@ struct Settings {
     bool  debug           = false;
     char  extraArgs[256]  = "";
     int   receivers       = 1;  // phones mirroring side by side (one uxplay.exe each)
+    int   discovery       = 0;  // 0 automatic, 1 UxPlay built-in, 2 Apple Bonjour only
 };
+
+// Value of UXPLAY_MDNS that uxplay.exe reads for Settings::discovery.
+const char* DiscoveryMode(const Settings& s);
 
 static const int kMaxReceivers = 4;
 

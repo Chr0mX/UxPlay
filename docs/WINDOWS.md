@@ -39,11 +39,17 @@ iPhone, iPad and Mac find AirPlay receivers with mDNS/DNS-SD (RFC 6762/6763).
 UxPlay for Windows has its own built-in mDNS responder, so **Apple Bonjour is not
 required** — nothing extra to install, no administrator prompt.
 
-If Apple's Bonjour Service is already installed and running (it comes with iTunes,
-iCloud for Windows, the Apple Devices app or *Bonjour Print Services*), UxPlay uses it
-instead. The **Device discovery** row on the Connection page shows which one is in use
-("Built-in" or "Apple Bonjour"). To force the built-in responder, set the environment
-variable `UXPLAY_MDNS=builtin`.
+Choose which one is used under **Connection → Device discovery**:
+
+| Setting | What it does |
+|---|---|
+| **Automatic** (default) | Apple Bonjour if its service is installed and running (it comes with iTunes, iCloud for Windows, the Apple Devices app or *Bonjour Print Services*), otherwise UxPlay's own. |
+| **UxPlay (built-in)** | Always UxPlay's own discovery. Lightweight: it runs inside `uxplay.exe` only while receiving, with no always-on service and nothing to install. |
+| **Apple Bonjour** | Only Apple's Bonjour Service. If it is not installed or not running, UxPlay shows *Device discovery is unavailable*. |
+
+While a receiver runs, the same row shows which one is in use. From the command line,
+set the environment variable `UXPLAY_MDNS` to `auto`, `builtin` or `bonjour` (the launcher
+does this for you).
 
 The built-in responder needs UDP port 5353 (mDNS) to be allowed by the firewall; the
 installer's firewall rule for `uxplay.exe` covers it.
@@ -257,7 +263,7 @@ The **UxPlay** shortcut opens `uxplay-gui.exe`, which configures and runs `uxpla
 ### UxPlay doesn't appear in AirPlay list
 
 1. **Check Windows Firewall:** Open **Windows Defender Firewall → Allow an app** and ensure `uxplay.exe` has both private and public network access (discovery uses UDP port 5353).
-2. **Discovery:** the Connection page shows *Device discovery: Built-in* or *Apple Bonjour*. If another mDNS program misbehaves, try `UXPLAY_MDNS=builtin`, or stop the Bonjour Service in `services.msc`.
+2. **Discovery:** under **Connection → Device discovery**, try **UxPlay (built-in)** (or **Automatic**). If you chose **Apple Bonjour**, make sure the Bonjour Service is running in `services.msc`.
 3. **Same network:** Confirm your iOS device and PC are on the same subnet. Guest Wi-Fi isolation blocks mDNS.
 4. **Port conflict:** Try a different port with `-p 7200`.
 

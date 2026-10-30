@@ -142,6 +142,7 @@ struct dnssd_s {
     DNSServiceRefDeallocate_t  raop_dealloc;      /* backend that registered each service */
     DNSServiceRefDeallocate_t  airplay_dealloc;
     int builtin;                                  /* 1: built-in mDNS responder, not Bonjour */
+    int bonjour_only;                             /* UXPLAY_MDNS=bonjour: never fall back */
 
     char *name;
     int name_len;
@@ -269,7 +270,8 @@ static DNSServiceErrorType register_service(dnssd_t *dnssd, DNSServiceRef *ref, 
                                                       dnssd->TXTRecordGetLength(txt),
                                                       dnssd->TXTRecordGetBytesPtr(txt), NULL, NULL);
 #ifdef _WIN32
-    if (r && !dnssd->builtin && (r == -65563 /* ServiceNotRunning */ || r == -65537 /* Unknown */)) {
+    if (r && !dnssd->builtin && !dnssd->bonjour_only &&
+        (r == -65563 /* ServiceNotRunning */ || r == -65537 /* Unknown */)) {
         use_builtin_responder(dnssd);
         r = dnssd->DNSServiceRegister(ref, 0, 0, name, regtype, NULL, NULL, htons(port),
                                       dnssd->TXTRecordGetLength(txt), dnssd->TXTRecordGetBytesPtr(txt), NULL, NULL);
@@ -315,11 +317,15 @@ dnssd_init(const char* name, int name_len, const char* hw_addr, int hw_addr_len,
     dnssd->features2 = (uint32_t) features;
 
 #ifdef WIN32
-    /* Apple Bonjour when its service is installed; otherwise the built-in
-     * responder. UXPLAY_MDNS=builtin forces the built-in one. */
+    /* Which service discovery to use (UXPLAY_MDNS, set by the launcher's
+     * "Device discovery" setting):
+     *   auto (default) - Apple Bonjour if its service runs, else the built-in responder
+     *   builtin        - always the built-in responder (Bonjour not needed)
+     *   bonjour        - only Apple Bonjour; fails like before if it is missing */
     {
         const char *mode = getenv("UXPLAY_MDNS");
         int force_builtin = mode && !strcmp(mode, "builtin");
+        dnssd->bonjour_only = mode && !strcmp(mode, "bonjour");
         dnssd->module = force_builtin ? NULL : LoadLibraryA("dnssd.dll");
         if (dnssd->module) {
             dnssd->DNSServiceRegister = (DNSServiceRegister_t)GetProcAddress(dnssd->module, "DNSServiceRegister");
@@ -329,7 +335,14 @@ dnssd_init(const char* name, int name_len, const char* hw_addr, int hw_addr_len,
                 dnssd->module = NULL;
             }
         }
-        if (!dnssd->module) use_builtin_responder(dnssd);
+        if (!dnssd->module) {
+            if (dnssd->bonjour_only) {
+                if (error) *error = DNSSD_ERROR_LIBNOTFOUND;   /* "Could not initialize dnssd library" */
+                free(dnssd);
+                return NULL;
+            }
+            use_builtin_responder(dnssd);
+        }
         dnssd->TXTRecordCreate = builtin_TXTRecordCreate;
         dnssd->TXTRecordSetValue = builtin_TXTRecordSetValue;
         dnssd->TXTRecordGetLength = builtin_TXTRecordGetLength;

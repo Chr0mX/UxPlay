@@ -93,6 +93,7 @@ static pthread_t       g_thread;
 static int             g_running = 0;
 static volatile int    g_stop = 0;
 static mdns_sock_t     g_sock = MDNS_BAD_SOCK;
+static mdns_sock_t     g_wake = MDNS_BAD_SOCK;   /* loopback socket: interrupts the thread's sleep */
 static iface_t         g_ifs[MAX_IFACES];
 static int             g_nifs = 0;
 static double          g_next_scan = 0;
@@ -578,16 +579,44 @@ static void run_timers(double t)
     }
 }
 
+/* Interrupts the responder thread's sleep (new timers, stop request). */
+static void wake(void)
+{
+    if (g_wake == MDNS_BAD_SOCK) return;
+    struct sockaddr_in a;
+    socklen_t al = sizeof(a);
+    if (getsockname(g_wake, (struct sockaddr *) &a, &al) != 0) return;
+    sendto(g_wake, "w", 1, 0, (const struct sockaddr *) &a, sizeof(a));
+}
+
 static void *responder_thread(void *arg)
 {
     (void) arg;
     unsigned char buf[PKT_MAX];
     while (!g_stop) {
+        /* Sleep until a query arrives, the next probe/announcement/rescan is due
+         * (at most 1 s), or wake() is called: idle between queries. */
+        pthread_mutex_lock(&g_mtx);
+        double t0 = now_s(), until = g_next_scan;
+        for (mdns_service_t *s = g_list; s; s = s->next)
+            if (s->state != ST_ESTABLISHED && s->due < until) until = s->due;
+        pthread_mutex_unlock(&g_mtx);
+        double wait = until - t0;
+        if (wait > 1.0) wait = 1.0;
+        if (wait < 0.0) wait = 0.0;
         fd_set rd;
         FD_ZERO(&rd);
         FD_SET(g_sock, &rd);
-        struct timeval tv = { 0, 100000 };   /* 100 ms: timers and stop requests */
-        int r = select((int) g_sock + 1, &rd, NULL, NULL, &tv);
+        FD_SET(g_wake, &rd);
+        struct timeval tv;
+        tv.tv_sec = (long) wait;
+        tv.tv_usec = (long) ((wait - (double) tv.tv_sec) * 1e6);
+        int maxfd = (int) (g_sock > g_wake ? g_sock : g_wake);
+        int r = select(maxfd + 1, &rd, NULL, NULL, &tv);
+        if (r > 0 && FD_ISSET(g_wake, &rd)) {
+            char junk[16];
+            recv(g_wake, junk, sizeof(junk), 0);
+        }
         if (r > 0 && FD_ISSET(g_sock, &rd)) {
             struct sockaddr_in from;
             socklen_t fl = sizeof(from);
@@ -660,13 +689,28 @@ static int start_responder(void)
     setsockopt(g_sock, IPPROTO_IP, IP_MULTICAST_LOOP, &loop, sizeof(loop));
     (void) ttl_i; (void) loop_i;
 #endif
+    g_wake = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (g_wake != MDNS_BAD_SOCK) {
+        struct sockaddr_in w;
+        memset(&w, 0, sizeof(w));
+        w.sin_family = AF_INET;
+        w.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        w.sin_port = 0;
+        if (bind(g_wake, (struct sockaddr *) &w, sizeof(w)) != 0) { mdns_close(g_wake); g_wake = MDNS_BAD_SOCK; }
+    }
+    if (g_wake == MDNS_BAD_SOCK) {
+        mdns_close(g_sock);
+        g_sock = MDNS_BAD_SOCK;
+        return -1;
+    }
     g_nifs = 0;
     update_ifaces();
     g_next_scan = now_s() + 5.0;
     g_stop = 0;
     if (pthread_create(&g_thread, NULL, responder_thread, NULL) != 0) {
         mdns_close(g_sock);
-        g_sock = MDNS_BAD_SOCK;
+        mdns_close(g_wake);
+        g_sock = g_wake = MDNS_BAD_SOCK;
         return -1;
     }
     g_running = 1;
@@ -717,6 +761,7 @@ int mdns_register(const char *name, const char *regtype, unsigned short port,
     s->due = now_s() + jitter(0.25);
     s->next = g_list;
     g_list = s;
+    wake();   /* start probing now, not at the end of the current sleep */
     pthread_mutex_unlock(&g_mtx);
     if (out) *out = s;
     return 0;
@@ -734,7 +779,7 @@ void mdns_unregister(mdns_service_t *service)
         if (service->state != ST_PROBING) send_all_records(service, 1);   /* goodbye */
     }
     stop = g_running && !g_list;
-    if (stop) g_stop = 1;
+    if (stop) { g_stop = 1; wake(); }
     pthread_mutex_unlock(&g_mtx);
     free(service->txt);
     free(service);
@@ -745,7 +790,8 @@ void mdns_unregister(mdns_service_t *service)
             for (int i = 0; i < g_nifs; i++) membership(g_ifs[i].addr, 0);
             mdns_close(g_sock);
         }
-        g_sock = MDNS_BAD_SOCK;
+        if (g_wake != MDNS_BAD_SOCK) mdns_close(g_wake);
+        g_sock = g_wake = MDNS_BAD_SOCK;
         g_nifs = 0;
         g_running = 0;
         pthread_mutex_unlock(&g_mtx);

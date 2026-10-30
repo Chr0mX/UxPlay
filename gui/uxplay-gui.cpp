@@ -381,6 +381,9 @@ static void LaunchOne(const Settings& s, int i)
     si.StartupInfo.hStdInput  = nul != INVALID_HANDLE_VALUE ? nul : NULL;
     if (haveList) si.lpAttributeList = attrs;
 
+    // Device discovery choice (Connection page), inherited by uxplay.exe.
+    SetEnvironmentVariableW(L"UXPLAY_MDNS", Wide(DiscoveryMode(s)).c_str());
+
     PROCESS_INFORMATION pi = {};
     std::vector<wchar_t> buf(cmdLine.begin(), cmdLine.end());
     buf.push_back(0);
