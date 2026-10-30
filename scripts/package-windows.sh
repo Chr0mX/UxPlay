@@ -175,7 +175,7 @@ elif [ -f "/c/Windows/System32/dnssd.dll" ]; then
   echo "==> Copying dnssd.dll from System32"
   cp "/c/Windows/System32/dnssd.dll" "${DIST_DIR}/dnssd.dll"
 else
-  echo "==> WARNING: dnssd.dll not found. Bonjour must be installed separately."
+  echo "==> dnssd.dll not found: UxPlay will use its built-in mDNS responder (Bonjour is optional)."
 fi
 
 # ── Create launcher batch script ──────────────────────────────────────────────
@@ -232,11 +232,8 @@ UxPlay turns your PC into an AirPlay receiver: mirror an iPhone, iPad or Mac scr
 
 ## Quick start
 
-1. **Apple Bonjour** is required. If it is missing, UxPlay downloads it from Apple and installs
-   it for you (approve the Windows permission prompt). It also comes with iTunes, iCloud for
-   Windows and the Apple TV app.
-2. Open **UxPlay** (\`uxplay-gui.exe\`) and press **Start**. Allow it through Windows Firewall if asked.
-3. On your iPhone or iPad, open **Control Center → Screen Mirroring** and pick the name UxPlay shows.
+1. Open **UxPlay** (\`uxplay-gui.exe\`) and press **Start**. Allow it through Windows Firewall if asked. Nothing else to install (no Bonjour or iTunes needed).
+2. On your iPhone or iPad, open **Control Center → Screen Mirroring** and pick the name UxPlay shows.
 
 ## The UxPlay window
 
@@ -265,8 +262,9 @@ UxPlay turns your PC into an AirPlay receiver: mirror an iPhone, iPad or Mac scr
 
 ## Troubleshooting
 
-- **Not in the AirPlay list:** make sure the *Bonjour Service* is running (services.msc), that
-  Windows Firewall allows UxPlay, and that the PC and phone are on the same network.
+- **Not in the AirPlay list:** make sure Windows Firewall allows UxPlay (discovery uses UDP port
+  5353) and that the PC and phone are on the same network. Apple Bonjour is not needed: UxPlay
+  has its own discovery and uses Bonjour only if it is already installed.
 - **Black screen / no video:** set the video decoder to *Software (FFmpeg)* on the Display page.
 - **Audio problems:** try a different audio sink on the Audio page.
 

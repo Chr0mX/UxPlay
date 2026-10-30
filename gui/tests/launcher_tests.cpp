@@ -28,6 +28,8 @@ static void TestFullConnectionLifecycle()
 {
     Session s;
     s.OnLaunched(0, 1, "x");
+    s.OnLine(1, "@uxplay-status discovery backend=builtin");
+    CHECK(s.discovery == "builtin");
     s.OnLine(1, "@uxplay-status ready port=7100");
     s.OnLine(2, "Remote: 192.168.1.20");
     s.OnLine(2, "@uxplay-status connection-open count=1");

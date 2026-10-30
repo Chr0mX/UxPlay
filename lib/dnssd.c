@@ -139,6 +139,10 @@ struct dnssd_s {
 
     DNSServiceRef raop_service;
     DNSServiceRef airplay_service;
+    DNSServiceRefDeallocate_t  raop_dealloc;      /* backend that registered each service */
+    DNSServiceRefDeallocate_t  airplay_dealloc;
+    int builtin;                                  /* 1: built-in mDNS responder, not Bonjour */
+    int bonjour_only;                             /* UXPLAY_MDNS=bonjour: never fall back */
 
     char *name;
     int name_len;
@@ -155,6 +159,127 @@ struct dnssd_s {
 };
 
 
+
+#ifdef _WIN32
+/* ── Built-in discovery (Windows) ──────────────────────────────────────────
+ * When Apple's Bonjour service is not installed (dnssd.dll missing) or not
+ * running, UxPlay advertises itself with its own mDNS responder
+ * (mdns_responder.c), so Bonjour is not required. TXT records are always built
+ * here: plain DNS wire format, identical to what dnssd.dll produces. */
+#include "mdns_responder.h"
+
+typedef struct { unsigned char *buf; uint16_t len; uint16_t cap; } builtin_txt_t;
+typedef char builtin_txt_fits[sizeof(builtin_txt_t) <= sizeof(TXTRecordRef) ? 1 : -1];
+
+static void DNSSD_STDCALL builtin_TXTRecordCreate(TXTRecordRef *ref, uint16_t bufferLen, void *buffer)
+{
+    (void) bufferLen; (void) buffer;
+    memset(ref, 0, sizeof(*ref));
+}
+
+static DNSServiceErrorType DNSSD_STDCALL builtin_TXTRecordSetValue(TXTRecordRef *ref, const char *key,
+                                                                  uint8_t valueSize, const void *value)
+{
+    builtin_txt_t *t = (builtin_txt_t *) ref;
+    size_t kl = strlen(key);
+    size_t item = kl + (value ? 1 + (size_t) valueSize : 0);
+    if (!kl || item > 255) return -65540;   /* kDNSServiceErr_BadParam */
+    /* replace an existing key (keys are case-insensitive) */
+    for (size_t i = 0; i < t->len; ) {
+        size_t n = t->buf[i];
+        int match = n >= kl && (n == kl || t->buf[i + 1 + kl] == '=');
+        for (size_t c = 0; match && c < kl; c++) {
+            char a = (char) t->buf[i + 1 + c], b = key[c];
+            if (a >= 'A' && a <= 'Z') a += 32;
+            if (b >= 'A' && b <= 'Z') b += 32;
+            match = a == b;
+        }
+        if (match) {
+            memmove(t->buf + i, t->buf + i + 1 + n, t->len - i - 1 - n);
+            t->len -= (uint16_t) (1 + n);
+        } else {
+            i += 1 + n;
+        }
+    }
+    if ((size_t) t->len + 1 + item > 65535) return -65540;
+    if ((size_t) t->len + 1 + item > t->cap) {
+        size_t cap = t->cap ? t->cap : 256;
+        while (cap < (size_t) t->len + 1 + item) cap *= 2;
+        if (cap > 65535) cap = 65535;
+        unsigned char *nb = (unsigned char *) realloc(t->buf, cap);
+        if (!nb) return -65539;   /* kDNSServiceErr_NoMemory */
+        t->buf = nb;
+        t->cap = (uint16_t) cap;
+    }
+    unsigned char *p = t->buf + t->len;
+    *p++ = (unsigned char) item;
+    memcpy(p, key, kl); p += kl;
+    if (value) { *p++ = '='; memcpy(p, value, valueSize); }
+    t->len += (uint16_t) (1 + item);
+    return 0;
+}
+
+static uint16_t DNSSD_STDCALL builtin_TXTRecordGetLength(const TXTRecordRef *ref)
+{
+    return ((const builtin_txt_t *) ref)->len;
+}
+
+static const void * DNSSD_STDCALL builtin_TXTRecordGetBytesPtr(const TXTRecordRef *ref)
+{
+    return ((const builtin_txt_t *) ref)->buf;
+}
+
+static void DNSSD_STDCALL builtin_TXTRecordDeallocate(TXTRecordRef *ref)
+{
+    builtin_txt_t *t = (builtin_txt_t *) ref;
+    free(t->buf);
+    memset(ref, 0, sizeof(*ref));
+}
+
+static DNSServiceErrorType DNSSD_STDCALL builtin_DNSServiceRegister(DNSServiceRef *sdRef, DNSServiceFlags flags,
+        uint32_t interfaceIndex, const char *name, const char *regtype, const char *domain, const char *host,
+        uint16_t port, uint16_t txtLen, const void *txtRecord, DNSServiceRegisterReply callBack, void *context)
+{
+    (void) flags; (void) interfaceIndex; (void) domain; (void) host; (void) callBack; (void) context;
+    mdns_service_t *s = NULL;
+    int r = mdns_register(name, regtype, ntohs(port), (const unsigned char *) txtRecord, txtLen, &s);
+    *sdRef = (DNSServiceRef) s;
+    return r;
+}
+
+static void DNSSD_STDCALL builtin_DNSServiceRefDeallocate(DNSServiceRef sdRef)
+{
+    mdns_unregister((mdns_service_t *) sdRef);
+}
+
+static void use_builtin_responder(dnssd_t *dnssd)
+{
+    dnssd->DNSServiceRegister = builtin_DNSServiceRegister;
+    dnssd->DNSServiceRefDeallocate = builtin_DNSServiceRefDeallocate;
+    dnssd->builtin = 1;
+}
+#endif
+
+/* Registers through the current backend. On Windows, if the Bonjour service
+ * turns out not to be running, switches to the built-in responder and retries. */
+static DNSServiceErrorType register_service(dnssd_t *dnssd, DNSServiceRef *ref, DNSServiceRefDeallocate_t *dealloc,
+                                            const char *name, const char *regtype, unsigned short port,
+                                            const TXTRecordRef *txt)
+{
+    DNSServiceErrorType r = dnssd->DNSServiceRegister(ref, 0, 0, name, regtype, NULL, NULL, htons(port),
+                                                      dnssd->TXTRecordGetLength(txt),
+                                                      dnssd->TXTRecordGetBytesPtr(txt), NULL, NULL);
+#ifdef _WIN32
+    if (r && !dnssd->builtin && !dnssd->bonjour_only &&
+        (r == -65563 /* ServiceNotRunning */ || r == -65537 /* Unknown */)) {
+        use_builtin_responder(dnssd);
+        r = dnssd->DNSServiceRegister(ref, 0, 0, name, regtype, NULL, NULL, htons(port),
+                                      dnssd->TXTRecordGetLength(txt), dnssd->TXTRecordGetBytesPtr(txt), NULL, NULL);
+    }
+#endif
+    *dealloc = dnssd->DNSServiceRefDeallocate;
+    return r;
+}
 
 dnssd_t *
 dnssd_init(const char* name, int name_len, const char* hw_addr, int hw_addr_len, int *error, unsigned char pin_pw)
@@ -192,28 +317,38 @@ dnssd_init(const char* name, int name_len, const char* hw_addr, int hw_addr_len,
     dnssd->features2 = (uint32_t) features;
 
 #ifdef WIN32
-    dnssd->module = LoadLibraryA("dnssd.dll");
-	if (!dnssd->module) {
-		if (error) *error = DNSSD_ERROR_LIBNOTFOUND;
-		free(dnssd);
-		return NULL;
-	}
-	dnssd->DNSServiceRegister = (DNSServiceRegister_t)GetProcAddress(dnssd->module, "DNSServiceRegister");
-	dnssd->DNSServiceRefDeallocate = (DNSServiceRefDeallocate_t)GetProcAddress(dnssd->module, "DNSServiceRefDeallocate");
-	dnssd->TXTRecordCreate = (TXTRecordCreate_t)GetProcAddress(dnssd->module, "TXTRecordCreate");
-	dnssd->TXTRecordSetValue = (TXTRecordSetValue_t)GetProcAddress(dnssd->module, "TXTRecordSetValue");
-	dnssd->TXTRecordGetLength = (TXTRecordGetLength_t)GetProcAddress(dnssd->module, "TXTRecordGetLength");
-	dnssd->TXTRecordGetBytesPtr = (TXTRecordGetBytesPtr_t)GetProcAddress(dnssd->module, "TXTRecordGetBytesPtr");
-	dnssd->TXTRecordDeallocate = (TXTRecordDeallocate_t)GetProcAddress(dnssd->module, "TXTRecordDeallocate");
-
-	if (!dnssd->DNSServiceRegister || !dnssd->DNSServiceRefDeallocate || !dnssd->TXTRecordCreate ||
-	    !dnssd->TXTRecordSetValue || !dnssd->TXTRecordGetLength || !dnssd->TXTRecordGetBytesPtr ||
-	    !dnssd->TXTRecordDeallocate) {
-		if (error) *error = DNSSD_ERROR_PROCNOTFOUND;
-		FreeLibrary(dnssd->module);
-		free(dnssd);
-		return NULL;
-	}
+    /* Which service discovery to use (UXPLAY_MDNS, set by the launcher's
+     * "Device discovery" setting):
+     *   auto (default) - Apple Bonjour if its service runs, else the built-in responder
+     *   builtin        - always the built-in responder (Bonjour not needed)
+     *   bonjour        - only Apple Bonjour; fails like before if it is missing */
+    {
+        const char *mode = getenv("UXPLAY_MDNS");
+        int force_builtin = mode && !strcmp(mode, "builtin");
+        dnssd->bonjour_only = mode && !strcmp(mode, "bonjour");
+        dnssd->module = force_builtin ? NULL : LoadLibraryA("dnssd.dll");
+        if (dnssd->module) {
+            dnssd->DNSServiceRegister = (DNSServiceRegister_t)GetProcAddress(dnssd->module, "DNSServiceRegister");
+            dnssd->DNSServiceRefDeallocate = (DNSServiceRefDeallocate_t)GetProcAddress(dnssd->module, "DNSServiceRefDeallocate");
+            if (!dnssd->DNSServiceRegister || !dnssd->DNSServiceRefDeallocate) {
+                FreeLibrary(dnssd->module);
+                dnssd->module = NULL;
+            }
+        }
+        if (!dnssd->module) {
+            if (dnssd->bonjour_only) {
+                if (error) *error = DNSSD_ERROR_LIBNOTFOUND;   /* "Could not initialize dnssd library" */
+                free(dnssd);
+                return NULL;
+            }
+            use_builtin_responder(dnssd);
+        }
+        dnssd->TXTRecordCreate = builtin_TXTRecordCreate;
+        dnssd->TXTRecordSetValue = builtin_TXTRecordSetValue;
+        dnssd->TXTRecordGetLength = builtin_TXTRecordGetLength;
+        dnssd->TXTRecordGetBytesPtr = builtin_TXTRecordGetBytesPtr;
+        dnssd->TXTRecordDeallocate = builtin_TXTRecordDeallocate;
+    }
 #elif USE_LIBDL
     dnssd->module = dlopen("libdns_sd.so", RTLD_LAZY);
 	if (!dnssd->module) {
@@ -275,7 +410,7 @@ dnssd_destroy(dnssd_t *dnssd)
 {
     if (dnssd) {
 #ifdef WIN32
-        FreeLibrary(dnssd->module);
+        if (dnssd->module) FreeLibrary(dnssd->module);
 #elif USE_LIBDL
         dlclose(dnssd->module);
 #endif
@@ -345,13 +480,8 @@ dnssd_register_raop(dnssd_t *dnssd, unsigned short port)
     strncat(servname, dnssd->name, sizeof(servname)-strlen(servname)-1);
 
     /* Register the service */
-    DNSServiceErrorType retval = dnssd->DNSServiceRegister(&dnssd->raop_service, 0, 0,
-                                                          servname, "_raop._tcp",
-                                                          NULL, NULL,
-                                                          htons(port),
-                                                          dnssd->TXTRecordGetLength(&dnssd->raop_record),
-                                                          dnssd->TXTRecordGetBytesPtr(&dnssd->raop_record),
-                                                          NULL, NULL);
+    DNSServiceErrorType retval = register_service(dnssd, &dnssd->raop_service, &dnssd->raop_dealloc,
+                                                  servname, "_raop._tcp", port, &dnssd->raop_record);
 
     return (int) retval;   /* error codes are listed in Apple's dns_sd.h */
 }
@@ -398,13 +528,8 @@ dnssd_register_airplay(dnssd_t *dnssd, unsigned short port)
     dnssd->TXTRecordSetValue(&dnssd->airplay_record, "vv", strlen(AIRPLAY_VV), AIRPLAY_VV);
 
     /* Register the service */
-    DNSServiceErrorType retval = dnssd->DNSServiceRegister(&dnssd->airplay_service, 0, 0,
-                                                           dnssd->name, "_airplay._tcp",
-                                                           NULL, NULL,
-                                                           htons(port),
-                                                           dnssd->TXTRecordGetLength(&dnssd->airplay_record),
-                                                           dnssd->TXTRecordGetBytesPtr(&dnssd->airplay_record),
-                                                           NULL, NULL);
+    DNSServiceErrorType retval = register_service(dnssd, &dnssd->airplay_service, &dnssd->airplay_dealloc,
+                                                  dnssd->name, "_airplay._tcp", port, &dnssd->airplay_record);
 
     return (int) retval;   /* error codes are listed in Apple's dns_sd.h */
 }
@@ -449,7 +574,7 @@ dnssd_unregister_raop(dnssd_t *dnssd)
     /* Deallocate TXT record */
     dnssd->TXTRecordDeallocate(&dnssd->raop_record);
 
-    dnssd->DNSServiceRefDeallocate(dnssd->raop_service);
+    dnssd->raop_dealloc(dnssd->raop_service);
     dnssd->raop_service = NULL;
 
     if (dnssd->airplay_service == NULL) {
@@ -470,13 +595,17 @@ dnssd_unregister_airplay(dnssd_t *dnssd)
     /* Deallocate TXT record */
     dnssd->TXTRecordDeallocate(&dnssd->airplay_record);
 
-    dnssd->DNSServiceRefDeallocate(dnssd->airplay_service);
+    dnssd->airplay_dealloc(dnssd->airplay_service);
     dnssd->airplay_service = NULL;
 
     if (dnssd->raop_service == NULL) {
         free(dnssd->name);
         free(dnssd->hw_addr);
     }
+}
+
+int dnssd_uses_builtin(dnssd_t *dnssd) {
+    return dnssd->builtin;
 }
 
 uint64_t dnssd_get_airplay_features(dnssd_t *dnssd) {

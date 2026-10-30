@@ -1973,6 +1973,12 @@ static int register_dnssd() {
 
     LOGD("register_dnssd: advertised AirPlay service with \"Features\" code = 0x%llX",
          dnssd_get_airplay_features(dnssd));
+    if (dnssd_uses_builtin(dnssd)) {
+        LOGI("Service discovery: built-in mDNS responder (Apple Bonjour is not installed or not running)");
+        gui_status_event("discovery backend=builtin");
+    } else {
+        gui_status_event("discovery backend=bonjour");
+    }
     return 0;
 }
 

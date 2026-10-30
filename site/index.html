@@ -158,7 +158,7 @@
         </a>
         <a class="btn btn-secondary" id="dl-zip" href="https://github.com/Chr0mX/UxPlay/releases">Portable ZIP</a>
       </div>
-      <p class="release-note" id="release-note">Windows 10 or 11 (64-bit) · Requires Apple Bonjour</p>
+      <p class="release-note" id="release-note">Windows 10 or 11 (64-bit) · No Bonjour or iTunes needed</p>
       <div class="shot"><img src="assets/screen-connected.png" alt="The UxPlay window showing a connected iPhone" width="1040" height="700"></div>
     </div>
   </section>
@@ -178,7 +178,7 @@
         <div class="card"><div class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 8.5a5 5 0 1 0 1.5-3.6"/><path d="M2.5 2.5v3h3"/></svg></div>
           <h3>Rotate &amp; resize</h3><p>The player window fits the video's shape. Right-click it to rotate or refit — no reconnection needed.</p></div>
         <div class="card"><div class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1.8L14.8 13.8H1.2z"/><path d="M8 6v3.5"/><circle cx="8" cy="11.7" r=".6" fill="currentColor"/></svg></div>
-          <h3>Errors you can act on</h3><p>Missing Bonjour, a busy port, or a missing component? Get a clear explanation and a Try Again button to help you resolve the issue.</p></div>
+          <h3>Errors you can act on</h3><p>Discovery blocked, a busy port, or a missing component? Get a clear explanation and a Try Again button to help you resolve the issue.</p></div>
         <div class="card"><div class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4.5 6L7 8l-2.5 2M8.5 10.5h3"/></svg></div>
           <h3>Quiet by default</h3><p>No console windows. Output goes to a built-in console and a log file you can open any time.</p></div>
       </div>
@@ -191,8 +191,8 @@
       <h2 id="start-title">Up and running in three steps</h2>
       <p class="sub">Your PC and your phone need to be on the same Wi-Fi network.</p>
       <div class="steps">
-        <div class="step"><h3>Install Bonjour</h3><p>UxPlay uses Apple's Bonjour so devices can find your PC. If it is missing, the UxPlay installer downloads it from Apple and installs it for you. You can also get it <a href="https://support.apple.com/en-us/106380">from Apple</a>.</p></div>
-        <div class="step"><h3>Install UxPlay &amp; press Start</h3><p>Run the installer, open <strong>UxPlay</strong> and press <kbd>F5</kbd> or <strong>Start</strong>. Allow it through Windows Firewall when asked.</p></div>
+        <div class="step"><h3>Install UxPlay</h3><p>Run the installer. Nothing else to install: UxPlay has its own device discovery, so Apple Bonjour and iTunes are not needed.</p></div>
+        <div class="step"><h3>Press Start</h3><p>Open <strong>UxPlay</strong> and press <kbd>F5</kbd> or <strong>Start</strong>. Allow it through Windows Firewall when asked.</p></div>
         <div class="step"><h3>Mirror from your device</h3><p>On iPhone or iPad open <strong>Control Center → Screen Mirroring</strong> and pick the name shown in UxPlay.</p></div>
       </div>
     </div>
@@ -221,7 +221,7 @@
       <h2 id="faq-title">Common questions</h2>
       <p class="sub">More in the <a href="https://github.com/Chr0mX/UxPlay/blob/master/docs/WINDOWS.md">Windows guide</a>.</p>
       <details><summary>My PC doesn't show up in Screen Mirroring</summary>
-        <p>Check that the <em>Bonjour Service</em> is running (open <code>services.msc</code>), that Windows Firewall allows UxPlay, and that your PC and phone are on the same network. Guest Wi-Fi often blocks device discovery. UxPlay shows "Device discovery is unavailable" when Bonjour is missing.</p></details>
+        <p>Check that Windows Firewall allows UxPlay (discovery uses UDP port 5353) and that your PC and phone are on the same network. Guest Wi-Fi often blocks device discovery. Apple Bonjour is not needed; if it is installed, UxPlay uses it instead of its own discovery.</p></details>
       <details><summary>Why are there black bars around the picture?</summary>
         <p>UxPlay keeps the picture's proportions. The player window resizes itself to match the video, and keeps that shape when you resize it. Right-click the window and choose <em>Fit window to video</em> at any time, or rotate your phone to landscape.</p></details>
       <details><summary>Can two people mirror at the same time?</summary>
@@ -266,7 +266,7 @@
           if (/portable\.zip$/i.test(a.name)) document.getElementById("dl-zip").href = a.browser_download_url;
         });
         var date = new Date(rel.published_at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-        note.textContent = rel.name + " · " + date + " · Windows 10 or 11 (64-bit) · Requires Apple Bonjour";
+        note.textContent = rel.name + " · " + date + " · Windows 10 or 11 (64-bit) · No Bonjour or iTunes needed";
       })
       .catch(function () { /* keep the static links */ });
   })();

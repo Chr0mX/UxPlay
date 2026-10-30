@@ -1,6 +1,6 @@
 # UxPlay on Windows
 
-UxPlay runs natively on Windows 10 and 11 (64-bit) using GStreamer for audio/video rendering and Apple Bonjour for AirPlay device discovery. A portable ZIP release is available that requires no installation of MSYS2, Python, or package managers.
+UxPlay runs natively on Windows 10 and 11 (64-bit) using GStreamer for audio/video rendering and its own built-in mDNS responder for AirPlay device discovery (Apple Bonjour is optional). A portable ZIP release is available that requires no installation of MSYS2, Python, or package managers.
 
 ---
 
@@ -22,7 +22,6 @@ UxPlay runs natively on Windows 10 and 11 (64-bit) using GStreamer for audio/vid
 
 1. Download the latest `uxplay-windows-<version>.zip` from the [Releases](../../../releases) page.
 2. Extract to any folder (e.g. `C:\UxPlay`).
-3. **Bonjour:** open `uxplay-gui.exe`; if Bonjour is missing it installs it for you (see [Prerequisites](#prerequisites)).
 4. Double-click **`uxplay.bat`** or open a Command Prompt in the folder and run:
    ```
    uxplay.bat
@@ -34,31 +33,26 @@ UxPlay runs natively on Windows 10 and 11 (64-bit) using GStreamer for audio/vid
 
 ## Prerequisites
 
-### Apple Bonjour (required)
+### Device discovery (no Bonjour needed)
 
-UxPlay uses Apple's mDNS/DNS-SD protocol for AirPlay device discovery. The Bonjour service (`mDNSResponder`) must be running on Windows.
+iPhone, iPad and Mac find AirPlay receivers with mDNS/DNS-SD (RFC 6762/6763).
+UxPlay for Windows has its own built-in mDNS responder, so **Apple Bonjour is not
+required** — nothing extra to install, no administrator prompt.
 
-**The UxPlay installer and the UxPlay window install Bonjour for you.** If the
-Bonjour Service is missing, UxPlay downloads Apple's
-[Bonjour Print Services installer](https://download.info.apple.com/Mac_OS_X/061-8098.20100603.gthyu/BonjourPSSetup.exe),
-checks that it is Apple's signed file, and installs the Bonjour service silently
-(Windows asks for administrator permission). Progress and errors are shown in the
-setup dialog or in a card at the top of the UxPlay window, with **Try again**,
-**Open Apple's installer** and **Check again** buttons. Nothing is downloaded when
-Bonjour is already installed. If the automatic install fails, install it yourself
-from the link above (see also [Apple Support — Bonjour](https://support.apple.com/en-us/106380))
-and choose **Check again**.
+Choose which one is used under **Connection → Device discovery**:
 
-Bonjour is also installed by:
-- **iTunes for Windows**
-- **iCloud for Windows**
-- **Apple TV app**
-- **Apple Devices app** (Windows Store)
+| Setting | What it does |
+|---|---|
+| **Automatic** (default) | Apple Bonjour if its service is installed and running (it comes with iTunes, iCloud for Windows, the Apple Devices app or *Bonjour Print Services*), otherwise UxPlay's own. |
+| **UxPlay (built-in)** | Always UxPlay's own discovery. Lightweight: it runs inside `uxplay.exe` only while receiving, with no always-on service and nothing to install. |
+| **Apple Bonjour** | Only Apple's Bonjour Service. If it is not installed or not running, UxPlay shows *Device discovery is unavailable*. |
 
-If none of the above are installed, get the standalone installer:
-- Download [Bonjour Print Services for Windows](https://support.apple.com/downloads/Bonjour) from Apple (free).
-- Run `BonjourPSSetup.exe` and follow the prompts.
-- Verify it's running: open **Task Manager → Services** and check for `mDNSResponder` or open **services.msc** and look for **Bonjour Service**.
+While a receiver runs, the same row shows which one is in use. From the command line,
+set the environment variable `UXPLAY_MDNS` to `auto`, `builtin` or `bonjour` (the launcher
+does this for you).
+
+The built-in responder needs UDP port 5353 (mDNS) to be allowed by the firewall; the
+installer's firewall rule for `uxplay.exe` covers it.
 
 ### Network
 
@@ -206,7 +200,7 @@ pacman -S mingw-w64-ucrt-x86_64-cmake \
           mingw-w64-ucrt-x86_64-gst-libav
 ```
 
-> **Note:** `dns_sd.h` is bundled in `deps/windows/` — no Bonjour SDK installer is required to build. At runtime, the Bonjour service is still needed (see [Prerequisites](#prerequisites)).
+> **Note:** `dns_sd.h` is bundled in `deps/windows/` — no Bonjour SDK installer is required to build. At runtime UxPlay uses the Bonjour service if it is running, and its built-in mDNS responder otherwise (see [Prerequisites](#prerequisites)).
 
 ### 3. Build
 
@@ -223,7 +217,7 @@ cmake --build build
 ./build/uxplay.exe
 ```
 
-Allow Windows Firewall access when prompted. The Bonjour service must be running.
+Allow Windows Firewall access when prompted.
 
 ### 5. Create portable package (optional)
 
@@ -243,7 +237,7 @@ The **UxPlay** shortcut opens `uxplay-gui.exe`, which configures and runs `uxpla
 - **Connection status** at the top of the window shows *Receiver off*, *Starting*, *Disconnected*
   (waiting for devices), *Connecting*, *Connected* (device, address, stream type, duration) or *Error*.
   States come from events that `uxplay.exe` prints when the launcher sets `UXPLAY_GUI_STATUS=1`.
-- **Errors** (Bonjour missing, port in use, missing GStreamer plugin, invalid option, unexpected exit)
+- **Errors** (device discovery unavailable, port in use, missing GStreamer plugin, invalid option, unexpected exit)
   are explained with a next step, a **Try again** button and the technical details.
 - **Shortcuts:** `F5` start, `Shift+F5` stop, `Ctrl+Shift+F5` restart, `Ctrl+S` save, `Ctrl+1`–`Ctrl+4` pages,
   `Ctrl+L` open log, `F1` documentation, `Ctrl+Q` exit.
@@ -268,8 +262,8 @@ The **UxPlay** shortcut opens `uxplay-gui.exe`, which configures and runs `uxpla
 
 ### UxPlay doesn't appear in AirPlay list
 
-1. **Check Bonjour service:** Open `services.msc` and verify **Bonjour Service** is running. Start it if stopped.
-2. **Check Windows Firewall:** Open **Windows Defender Firewall → Allow an app** and ensure `uxplay.exe` has both private and public network access.
+1. **Check Windows Firewall:** Open **Windows Defender Firewall → Allow an app** and ensure `uxplay.exe` has both private and public network access (discovery uses UDP port 5353).
+2. **Discovery:** under **Connection → Device discovery**, try **UxPlay (built-in)** (or **Automatic**). If you chose **Apple Bonjour**, make sure the Bonjour Service is running in `services.msc`.
 3. **Same network:** Confirm your iOS device and PC are on the same subnet. Guest Wi-Fi isolation blocks mDNS.
 4. **Port conflict:** Try a different port with `-p 7200`.
 
