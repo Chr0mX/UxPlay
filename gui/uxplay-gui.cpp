@@ -1383,6 +1383,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     g_ui.systemDark      = ReadSystemDark();
     g_ui.reduceMotion    = ReadReduceMotion();
     g_ui.launcherVersion = UXPLAY_LAUNCHER_VERSION;
+    g_ui.uxplayExe       = Utf8(g_exeDir + L"uxplay.exe");   // for copied commands
     {
         char pc[MAX_COMPUTERNAME_LENGTH + 1] = "";
         DWORD n = sizeof(pc);

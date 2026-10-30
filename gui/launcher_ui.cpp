@@ -91,6 +91,16 @@ const char* DiscoveryMode(const Settings& s)
     return s.discovery == 1 ? "builtin" : s.discovery == 2 ? "bonjour" : "auto";
 }
 
+std::string PasteReadyCommand(const Settings& s, const std::string& exePath)
+{
+    // set "VAR=value" (quoted) so cmd does not add the space before && to the value
+    std::string cmd = std::string("set \"UXPLAY_MDNS=") + DiscoveryMode(s) + "\" && ";
+    cmd += exePath.empty() ? std::string("uxplay.exe") : "\"" + exePath + "\"";
+    std::string args = BuildArgs(s, true);
+    if (!args.empty()) cmd += " " + args;
+    return cmd;
+}
+
 std::string SerializeSettings(const Settings& s)
 {
     std::ostringstream f;
@@ -751,6 +761,14 @@ static void ShowToast(UiState& ui, const char* text, bool isError = false)
     ui.toastUntil = ImGui::GetTime() + (isError ? 4.0 : 2.2);
 }
 
+// Copies the command for a Command Prompt (see PasteReadyCommand) and says so.
+static void CopyCommand(const Settings& s, UiState& ui)
+{
+    ImGui::SetClipboardText(PasteReadyCommand(s, ui.uxplayExe).c_str());
+    ShowToast(ui, s.password[0] ? "Command copied \xe2\x80\x94 the password shows as *** (type it in)"
+                                : "Command copied \xe2\x80\x94 paste it into a Command Prompt");
+}
+
 // ── Pages ─────────────────────────────────────────────────────────────────────
 
 struct Page { const char* name; const char* subtitle; Icon icon; };
@@ -963,7 +981,8 @@ static void PageAdvanced(Settings& s, UiState& ui, UiPrefs& prefs, const UiHost&
     EndRow();
     EndCard();
 
-    SectionHeader("Command line", "Exactly what Start runs. The password is masked here and in logs.");
+    SectionHeader("Command line", "Exactly what Start runs. Copy gives a command you can paste into a Command "
+                                  "Prompt. The password is masked here and in logs.");
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 a = ImGui::GetCursorScreenPos();
     float w = ImMin(ImGui::GetContentRegionAvail().x, g_colW), pad = Px(tok::S4);
@@ -984,10 +1003,8 @@ static void PageAdvanced(Settings& s, UiState& ui, UiPrefs& prefs, const UiHost&
     ImGui::PopFont();
     ImGui::SetCursorScreenPos(ImVec2(b.x - pad - Px(84), a.y + pad));
     if (ActionButton("Copy", Icon::Copy, true, ImVec2(Px(84), ImGui::GetFrameHeight()), BtnKind::Secondary,
-                     "Copy the command line (password masked)")) {
-        ImGui::SetClipboardText(cmd.c_str());
-        ShowToast(ui, "Command copied to clipboard");
-    }
+                     "Copy a command you can paste into a Command Prompt (password masked)"))
+        CopyCommand(s, ui);
     ImGui::SetCursorScreenPos(ImVec2(a.x, b.y));
     ImGui::Dummy(ImVec2(w, Px(tok::S4)));
 }
@@ -1494,10 +1511,10 @@ static void Footer(Settings& s, UiState& ui, const UiHost& host, bool running, b
             ImGui::TextUnformatted(cmd.c_str());
             ImGui::PopTextWrapPos();
             ImGui::PopFont();
-            TextColored(g_fonts.small, P->TextFaint, "Click to copy (password masked)");
+            TextColored(g_fonts.small, P->TextFaint, "Click to copy a command for a Command Prompt (password masked)");
             ImGui::EndTooltip();
         }
-        if (clicked) { ImGui::SetClipboardText(cmd.c_str()); ShowToast(ui, "Command copied to clipboard"); }
+        if (clicked) CopyCommand(s, ui);
     }
 }
 
@@ -1564,11 +1581,7 @@ static void MenuBar(Settings& s, UiState& ui, Session& ses, UiPrefs& prefs, cons
         if (ImGui::MenuItem("Open Logs Folder")) host.openLogFolder();
         if (logIssue) ImGui::TextDisabled("Logging unavailable: %s", logIssue);
         ImGui::Separator();
-        if (ImGui::MenuItem("Copy Command Line")) {
-            std::string cmd = "uxplay.exe " + BuildArgs(s, true);
-            ImGui::SetClipboardText(cmd.c_str());
-            ShowToast(ui, "Command copied to clipboard");
-        }
+        if (ImGui::MenuItem("Copy Command Line")) CopyCommand(s, ui);
         if (ImGui::MenuItem("Clear Console")) ses.ClearConsole();
         ImGui::EndMenu();
     }
