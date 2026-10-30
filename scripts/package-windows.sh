@@ -217,7 +217,7 @@ dll_imports() {   # lower-case DLL names a PE file imports
   objdump -p "$1" 2>/dev/null | awk '/DLL Name:/ {print tolower($3)}' || true
 }
 
-gst_inventory() {   # "<plugins> <features>" plus the libav decoder names, or empty if it cannot run
+gst_inventory() {   # "<plugins> <non-libav features>" plus the libav decoder names, or empty if it cannot run
   # Never fails (this script runs with set -e): an empty result means "could not check".
   local inspect="${DIST_DIR}/gst-inspect-slimcheck.exe" regdir out plugins scanner registry
   cp "${UCRT64_BIN}/gst-inspect-1.0.exe" "${inspect}" || return 0
@@ -231,7 +231,11 @@ gst_inventory() {   # "<plugins> <features>" plus the libav decoder names, or em
         ./gst-inspect-slimcheck.exe 2>/dev/null) || true
   rm -f "${inspect}"
   rm -rf "${regdir}"
-  { echo "${out}" | grep 'Total count' | grep -o '[0-9][0-9]*' | tr '\n' ' '
+  # Plugin count, number of features outside the libav plugin (the libav plugin
+  # lists one element per FFmpeg codec, so the slim FFmpeg intentionally has
+  # fewer of those), and the libav decoders UxPlay uses.
+  { echo "${out}" | grep 'Total count' | grep -o '[0-9][0-9]* plugin' | grep -o '[0-9][0-9]*' | tr '\n' ' '
+    echo "${out}" | grep -E '^[A-Za-z0-9_-]+: ' | grep -cv '^libav: ' | tr '\n' ' '
     echo "${out}" | grep -o 'avdec_\(h264\|h265\|aac\|alac\)\b' | sort -u | tr '\n' ' '; } || true
 }
 
@@ -277,7 +281,8 @@ if ls "${SLIM_BIN}"/avcodec-*.dll >/dev/null 2>&1; then
     done
     after=$(gst_inventory)
     echo "    after:  ${after:-gst-inspect could not run}"
-    if [ -n "${after}" ] && [ "${after}" = "${before}" ] && [[ "${after}" == *avdec_h264* ]]; then
+    if [ -n "${after}" ] && [ "${after}" = "${before}" ] && [[ "${after}" == *avdec_h264* ]] \
+       && [[ "${after}" == *avdec_aac* ]]; then
       echo "    Slim FFmpeg in use: ${removed} unused DLLs removed"
     else
       echo "::warning::slim FFmpeg check failed; keeping the full FFmpeg"
