@@ -43,8 +43,8 @@ Choose which one is used under **Connection → Device discovery**:
 
 | Setting | What it does |
 |---|---|
-| **Automatic** (default) | Apple Bonjour if its service is installed and running (it comes with iTunes, iCloud for Windows, the Apple Devices app or *Bonjour Print Services*), otherwise UxPlay's own. |
-| **UxPlay (built-in)** | Always UxPlay's own discovery. Lightweight: it runs inside `uxplay.exe` only while receiving, with no always-on service and nothing to install. |
+| **Automatic** | Apple Bonjour if its service is installed and running (it comes with iTunes, iCloud for Windows, the Apple Devices app or *Bonjour Print Services*), otherwise UxPlay's own. |
+| **UxPlay (built-in)** (default) | Always UxPlay's own discovery. Lightweight: it runs inside `uxplay.exe` only while receiving, with no always-on service and nothing to install. |
 | **Apple Bonjour** | Only Apple's Bonjour Service. If it is not installed or not running, UxPlay shows *Device discovery is unavailable*. |
 
 While a receiver runs, the same row shows which one is in use. From the command line,
