@@ -11,6 +11,11 @@ on:
     branches:
       - master
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Publish a full release (e.g. v1.73.6, must match uxplay.cpp). Empty = dev build."
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -127,6 +132,37 @@ jobs:
           fi
           echo "value=${VERSION}" >> "$GITHUB_OUTPUT"
 
+      # Full release requested by hand (workflow_dispatch input) or by a v* tag:
+      # check the version, and take that version's notes from CHANGELOG.md.
+      - name: Release notes
+        id: rel
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.release_version }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          APP_VERSION: ${{ steps.ver.outputs.value }}
+        run: |
+          TAG="${INPUT_VERSION}"
+          if [ -z "${TAG}" ] && [[ "${REF}" == refs/tags/v* ]]; then TAG="${REF_NAME}"; fi
+          if [ -z "${TAG}" ]; then echo "full=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          [[ "${TAG}" == v* ]] || TAG="v${TAG}"
+          if [ "${TAG#v}" != "${APP_VERSION}" ]; then
+            echo "::error::Release ${TAG} does not match the app version ${APP_VERSION} (uxplay.cpp)"
+            exit 1
+          fi
+          # Section "## [x.y.z] ..." up to the next "## " heading or "---"
+          awk -v v="${TAG#v}" '
+            index($0, "## [" v "]") == 1 { on = 1; next }
+            on && (/^## / || /^---/) { exit }
+            on { print }' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for ${TAG#v}"
+            exit 1
+          fi
+          echo "full=true" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Release notes for ${TAG}:"; cat release-notes.md
+
       - name: Configure CMake
         run: |
           cmake -B build -G Ninja \
@@ -179,16 +215,19 @@ jobs:
           if-no-files-found: warn
 
       - name: Create GitHub Release
-        if: always() && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
+        # Dev builds publish even when a step failed (as before); a full release only on success.
+        if: (success() || steps.rel.outputs.full != 'true') && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('dev-{0}', github.run_number) }}
-          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('dev build {0}', github.run_number) }}
+          tag_name: ${{ steps.rel.outputs.full == 'true' && steps.rel.outputs.tag || format('dev-{0}', github.run_number) }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ steps.rel.outputs.full == 'true' && format('UxPlay {0}', steps.rel.outputs.tag) || format('dev build {0}', github.run_number) }}
+          body_path: ${{ steps.rel.outputs.full == 'true' && 'release-notes.md' || '' }}
           files: |
             uxplay-windows-portable.zip
             uxplay-windows-installer.exe
           draft: false
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-          generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          prerelease: ${{ steps.rel.outputs.full != 'true' }}
+          make_latest: ${{ steps.rel.outputs.full == 'true' && 'true' || 'false' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
