@@ -349,7 +349,7 @@ Open a Command Prompt in this folder and run \`uxplay.exe\` with options, for ex
   5353) and that the PC and phone are on the same network. Apple Bonjour is not needed: UxPlay
   has its own discovery and uses Bonjour only if it is already installed.
 - **Black screen / no video:** set the video decoder to *Software (FFmpeg)* on the Display page.
-- **Audio problems:** try a different audio sink on the Audio page.
+- **Audio problems:** try a different *Audio output* on the Audio page.
 
 Requires Windows 10 or 11 (64-bit). Full documentation: docs/WINDOWS.md and the project README.
 READMEEOF

@@ -18,20 +18,20 @@
 
 const Option kVideoSinks[] = {
     { "D3D11 (recommended)",  "-vs d3d11videosink"  },
-    { "D3D12 (Alt+Enter FS)", "-vs d3d12videosink"  },
-    { "Auto",                 ""                    },
+    { "D3D12 (Alt+Enter fullscreen)", "-vs d3d12videosink" },
+    { "Automatic",            ""                    },
 };
 const Option kVideoDecoders[] = {
-    { "Hardware D3D11",    "-vd d3d11videodec" },
-    { "NVIDIA NVDEC",      "-vd nvh264dec"     },
-    { "Software (FFmpeg)", "-vd avdec_h264"    },
-    { "Auto (decodebin)",  ""                  },
+    { "Hardware (D3D11)",        "-vd d3d11videodec" },
+    { "NVIDIA hardware (NVDEC)", "-vd nvh264dec"     },
+    { "Software (FFmpeg)",       "-vd avdec_h264"    },
+    { "Automatic",               ""                  },
 };
 const Option kAudioSinks[] = {
     { "DirectSound",       "-as directsoundsink" },
     { "WASAPI",            "-as wasapisink"       },
     { "WASAPI Exclusive",  "-as wasapi2sink"      },
-    { "Auto",              ""                     },
+    { "Automatic",         ""                     },
     { "Disabled",          "-a"                   },
 };
 const int kVideoSinkCount    = (int)(sizeof(kVideoSinks)    / sizeof(*kVideoSinks));
@@ -228,6 +228,7 @@ namespace tok {
 
 static float   g_scale = 1.0f;
 static bool    g_reduceMotion = false;
+static bool    g_showFlags = false;   // command-line flag chips (View > Show Command-Line Options)
 static bool    g_animating = false;   // any transition still in progress this frame
 static UiFonts g_fonts;
 
@@ -615,7 +616,7 @@ static bool ComboOptions(const char* id, int* current, const Option* opts, int c
             bool sel = (*current == i);
             ImVec2 p = ImGui::GetCursorScreenPos();
             if (ImGui::Selectable(opts[i].label, sel, 0, ImVec2(0, Px(28)))) { *current = i; changed = true; }
-            if (opts[i].flag[0]) {   // show the flag each choice maps to, right aligned
+            if (opts[i].flag[0] && g_showFlags) {   // show the flag each choice maps to, right aligned
                 ImGui::PushFont(g_fonts.mono);
                 ImVec2 ts = ImGui::CalcTextSize(opts[i].flag);
                 float x = p.x + ImGui::GetContentRegionAvail().x - ts.x - Px(8);
@@ -711,7 +712,7 @@ static void BeginRow(const char* label, const char* desc, const char* flag = nul
     float ty = stacked ? p.y + padY : p.y + (rowH - textH) * 0.5f;
     ImGui::SetCursorScreenPos(ImVec2(p.x + padX, ty));
     TextColored(g_fonts.strong, P->Text, label);
-    if (flag) {
+    if (flag && g_showFlags) {
         ImGui::PushFont(g_fonts.strong);
         float lx = ImGui::CalcTextSize(label).x;
         ImGui::PopFont();
@@ -837,10 +838,11 @@ static void PageConnection(Settings& s, const UiState& ui, Session* sessions, in
     {
         static const Option kCounts[] = { { "1 phone", "" }, { "2 phones", "" }, { "3 phones", "" }, { "4 phones", "" } };
         int idx = s.receivers - 1;
-        BeginRow("Phones at once", running ? "Stop the receiver to change this."
-                 : "Maximum phones mirroring at the same time, each in its own window. Extra receivers "
-                   "(\"<name> 2\", ...) appear automatically while the others are in use, on ports base + 10 each.",
-                 nullptr, 160);
+        std::string def = DefaultServerName(ui);
+        std::string phonesDesc = "Maximum phones mirroring at the same time, each in its own window. Extra receivers, "
+                                 "such as \"" + ReceiverName(s, 1, def) + "\", appear automatically while the others "
+                                 "are in use, each on its own port.";
+        BeginRow("Phones at once", running ? "Stop the receiver to change this." : phonesDesc.c_str(), nullptr, 160);
         ImGui::BeginDisabled(running);
         if (ComboOptions("##v", &idx, kCounts, 4)) s.receivers = idx + 1;
         ImGui::EndDisabled();
@@ -891,10 +893,10 @@ static void PageDisplay(Settings& s, const UiHost& host)
 
     SectionHeader("Video playback");
     BeginCard();
-    BeginRow("Video sink", "Renderer used to present frames.", "-vs");
+    BeginRow("Video output", "How the video is drawn on screen.", "-vs");
     ComboOptions("##v", &s.videoSinkIdx, kVideoSinks, kVideoSinkCount);
     EndRow();
-    BeginRow("Video decoder", "Auto picks hardware decoding and falls back gracefully.", "-vd");
+    BeginRow("Video decoder", "Automatic uses hardware decoding when available and falls back to software.", "-vd");
     ComboOptions("##v", &s.videoDecoderIdx, kVideoDecoders, kVideoDecoderCount);
     EndRow();
     ToggleRow("H.265 / 4K", "Allow HEVC streams for 4K mirroring on supported devices.", "-h265", &s.h265);
@@ -906,9 +908,9 @@ static void PageDisplay(Settings& s, const UiHost& host)
 
 static void PageAudio(Settings& s)
 {
-    SectionHeader("Audio output");
+    SectionHeader("Playback");
     BeginCard();
-    BeginRow("Audio sink", "Output API. Choose Disabled to mirror video only.", "-as");
+    BeginRow("Audio output", "How sound is played. Choose Disabled to mirror video only.", "-as");
     ComboOptions("##v", &s.audioSinkIdx, kAudioSinks, kAudioSinkCount);
     EndRow();
     BeginRow("Volume", s.audioSinkIdx == kAudioDisabledIdx ? "Audio output is disabled."
@@ -1046,12 +1048,10 @@ static std::string StatusDetail(const Session& ses, const Settings& s, const UiS
 {
     std::string name = ReceiverName(s, index, DefaultServerName(ui));
     std::string dev = ses.deviceName.empty() ? std::string("A device") : ses.deviceName;
-    char port[32] = "";
-    if (ses.port) snprintf(port, sizeof(port), "  \xc2\xb7  port %u", ses.port);
     switch (ses.phase) {
     case Phase::Off:        return "Start the receiver to make this PC visible to Apple devices.";
     case Phase::Starting:   return "Launching uxplay.exe (PID " + std::to_string(ses.pid) + ")...";
-    case Phase::Waiting:    return "Waiting for devices  \xc2\xb7  visible as " + name + port;
+    case Phase::Waiting:    return "Pick \"" + name + "\" in Control Center \xe2\x86\x92 Screen Mirroring on your iPhone or iPad";
     case Phase::Connecting: {
         std::string d = dev;
         if (!ses.deviceModel.empty()) d += " (" + ses.deviceModel + ")";
@@ -1064,7 +1064,7 @@ static std::string StatusDetail(const Session& ses, const Settings& s, const UiS
         if (!ses.streamKinds.empty()) d += "  \xc2\xb7  " + ses.streamKinds;
         return d + "  \xc2\xb7  " + FormatDuration(now - ses.streamingSince);
     }
-    case Phase::Error:      return ses.error.title;
+    case Phase::Error:      return ses.hasError ? std::string("Details and how to fix it are shown below.") : ses.error.title;
     }
     return "";
 }
@@ -1106,11 +1106,7 @@ static void Sidebar(UiState& ui, UiPrefs& prefs, const Session& ses, bool compac
 
     // Navigation
     float y = lb.y + Px(26);
-    if (!compact) {
-        ImGui::SetCursorScreenPos(ImVec2(o.x + pad + Px(4), y));
-        TextColored(g_fonts.small, P->TextFaint, "SETTINGS");
-        y += Px(24);
-    }
+    if (!compact) y += Px(4);
     const float itemH = Px(36);
     for (int i = 0; i < kPageCount; ++i) {
         ImVec2 a(o.x + Px(8), y), b(o.x + width - Px(8), y + itemH);
@@ -1555,6 +1551,8 @@ static void MenuBar(Settings& s, UiState& ui, Session& ses, UiPrefs& prefs, cons
             ui.consoleVisible = !ui.consoleVisible;
         bool soc = prefs.showConsoleOnStartup;
         if (ImGui::MenuItem("Show Console on Startup", nullptr, &soc)) { prefs.showConsoleOnStartup = soc; ui.prefsDirty = true; }
+        bool flags = prefs.showOptionFlags;
+        if (ImGui::MenuItem("Show Command-Line Options", nullptr, &flags)) { prefs.showOptionFlags = flags; ui.prefsDirty = true; }
         ImGui::Separator();
         if (ImGui::BeginMenu("Theme")) {
             if (ImGui::MenuItem("Use System Setting", nullptr, prefs.theme == ThemeMode::System)) SetTheme(prefs, ui, ThemeMode::System);
@@ -1660,6 +1658,7 @@ void DrawLauncherUI(Settings& s, UiState& ui, Session* sessions, int count, UiPr
     Session& conSes = sessions[ui.consoleReceiver];
     g_fonts = fonts;
     g_reduceMotion = ui.reduceMotion;
+    g_showFlags = prefs.showOptionFlags;
     g_animating = false;
     ImGuiIO& io = ImGui::GetIO();
     double now = ImGui::GetTime();

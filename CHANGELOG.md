@@ -6,7 +6,20 @@ are listed in the upstream README.
 
 ## [Unreleased]
 
+### New Features
+- **Where to tap on the iPhone.** While waiting for a device, the status line says
+  exactly what to pick: *"Living Room PC" in Control Center → Screen Mirroring*.
+- **View → Show Command-Line Options** shows the `uxplay.exe` option behind each
+  setting (`-n`, `-vs`, ...).
+
 ### Improvements
+- Plain-language settings: *Video output* and *Audio output* instead of "Video sink"
+  and "Audio sink", *Automatic* instead of "Auto (decodebin)", and the Phones-at-once
+  description uses the receiver's real name.
+- Command-line option badges are hidden by default, so the settings read more
+  calmly; turn them on under *View → Show Command-Line Options*.
+- During an error, the status line points to the explanation below instead of
+  repeating its title. The sidebar's "SETTINGS" label is gone.
 - **Much smaller download.** The installer is about 12 MB instead of 49 MB, the
   portable ZIP about 16 MB instead of 69 MB (39 MB instead of 181 MB unpacked;
   measured in CI). The bundled FFmpeg now contains only the decoders UxPlay uses

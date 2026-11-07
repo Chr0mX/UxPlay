@@ -17,6 +17,7 @@ struct UiPrefs {
     int       x = 0, y = 0, w = 0, h = 0;
     bool      maximized         = false;
     bool      showConsoleOnStartup = false;   // console hidden by default
+    bool      showOptionFlags   = false;      // show command-line flag chips next to settings
     float     consoleHeight     = 240.0f;     // unscaled px
     int       page              = 0;
 };
