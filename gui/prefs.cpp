@@ -16,6 +16,7 @@ std::string SerializePrefs(const UiPrefs& p)
     f << "windowH="              << p.h << "\n";
     f << "maximized="            << (p.maximized ? 1 : 0) << "\n";
     f << "showConsoleOnStartup=" << (p.showConsoleOnStartup ? 1 : 0) << "\n";
+    f << "showOptionFlags="      << (p.showOptionFlags ? 1 : 0) << "\n";
     f << "consoleHeight="        << static_cast<int>(p.consoleHeight) << "\n";
     f << "page="                 << p.page << "\n";
     return f.str();
@@ -49,6 +50,7 @@ UiPrefs ParsePrefs(const std::string& text)
         else if (k == "windowH"       && ToInt(v, 0, 100000, &n))       p.h = (int)n;
         else if (k == "maximized"     && ToInt(v, 0, 1, &n))            p.maximized = n == 1;
         else if (k == "showConsoleOnStartup" && ToInt(v, 0, 1, &n))     p.showConsoleOnStartup = n == 1;
+        else if (k == "showOptionFlags" && ToInt(v, 0, 1, &n))          p.showOptionFlags = n == 1;
         else if (k == "consoleHeight" && ToInt(v, 120, 2000, &n))       p.consoleHeight = (float)n;
         else if (k == "page"          && ToInt(v, 0, 3, &n))            p.page = (int)n;
     }

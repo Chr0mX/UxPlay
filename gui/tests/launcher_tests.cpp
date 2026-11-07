@@ -156,18 +156,21 @@ static void TestPrefsRoundTripAndValidation()
 {
     UiPrefs p;
     CHECK(!p.showConsoleOnStartup);             // console hidden by default
+    CHECK(!p.showOptionFlags);                  // command-line flag chips hidden by default
     p.theme = ThemeMode::Light; p.x = -1200; p.y = 40; p.w = 1000; p.h = 700;
-    p.maximized = true; p.showConsoleOnStartup = true; p.consoleHeight = 300; p.page = 2;
+    p.maximized = true; p.showConsoleOnStartup = true; p.consoleHeight = 300; p.page = 2; p.showOptionFlags = true;
     UiPrefs q = ParsePrefs(SerializePrefs(p));
     CHECK(q.theme == ThemeMode::Light && q.x == -1200 && q.y == 40 && q.w == 1000 && q.h == 700);
     CHECK(q.maximized && q.showConsoleOnStartup && q.consoleHeight == 300 && q.page == 2);
+    CHECK(q.showOptionFlags);
 
-    UiPrefs bad = ParsePrefs("theme=9\nwindowW=abc\nwindowH=500\nconsoleHeight=5\npage=-3\nshowConsoleOnStartup=yes\n\x01garbage");
+    UiPrefs bad = ParsePrefs("theme=9\nwindowW=abc\nwindowH=500\nconsoleHeight=5\npage=-3\nshowConsoleOnStartup=yes\nshowOptionFlags=2\n\x01garbage");
     CHECK(bad.theme == ThemeMode::System);
     CHECK(bad.w == 0 && bad.h == 0);            // half a geometry is no geometry
     CHECK(bad.consoleHeight == 240.0f);
     CHECK(bad.page == 0);
     CHECK(!bad.showConsoleOnStartup);
+    CHECK(!bad.showOptionFlags);
 
     UiPrefs empty = ParsePrefs("");
     CHECK(empty.w == 0 && !empty.maximized);
